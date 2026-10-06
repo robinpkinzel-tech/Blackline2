@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Lokale KI und OCR-Daten (groß, werden per Setup heruntergeladen)
+ki/
+ocr/
+
+# Niemals Mandantendaten einchecken
+*.pdf
+*.tif
+*.tiff
+*.jpg
+*.jpeg
+*.png
+!docs/*.png
+!tests/data/*
+.ruff_cache/
