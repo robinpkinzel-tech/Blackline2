@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import re
 import shutil
@@ -21,6 +22,7 @@ import sys
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -79,8 +81,8 @@ def _open(url: str, headers: dict | None = None, timeout: int = 60):
     raise last or RuntimeError("Download fehlgeschlagen")
 
 
-def get_json(url: str) -> object:
-    with _open(url) as r:
+def get_json(url: str, headers: dict | None = None) -> object:
+    with _open(url, headers) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -145,30 +147,117 @@ def setup_ocr(variant: str = "standard", langs: tuple[str, ...] = ("deu", "eng")
 
 # ---------------------------------------------------------------- llama.cpp
 
-def _asset_patterns(gpu: str) -> list[str]:
+_GPU_WORDS = ("cuda", "vulkan", "hip", "rocm", "sycl", "opencl", "musa", "kompute", "openvino", "cann",
+              "radeon", "metal-off")
+_ARCHIVE = re.compile(r"\.(zip|tar\.gz|tgz)$", re.I)
+
+
+def _system_words() -> tuple[tuple[str, ...], tuple[str, ...]]:
     machine = platform.machine().lower()
     arm = machine in ("arm64", "aarch64")
     if sys.platform == "win32":
-        arch = "arm64" if arm else "x64"
-        if gpu == "cuda":
-            return [rf"bin-win-cuda-12[\d.]*-{arch}\.zip$", rf"bin-win-cuda-[\d.]+-{arch}\.zip$"]
-        if gpu == "vulkan":
-            return [rf"bin-win-vulkan-{arch}\.zip$"]
-        return [rf"bin-win-cpu-{arch}\.zip$", rf"bin-win-avx2-{arch}\.zip$"]
+        osw: tuple[str, ...] = ("win",)
+    elif sys.platform == "darwin":
+        osw = ("macos", "osx", "darwin", "apple")
+    else:
+        osw = ("ubuntu", "linux")
+    arch = ("arm64", "aarch64") if arm else ("x64", "x86_64", "amd64")
+    return osw, arch
+
+
+def _asset_score(name: str, gpu: str) -> int:
+    """Wie gut passt ein Paketname zu diesem System? 0 = gar nicht."""
+    n = name.lower()
+    if not _ARCHIVE.search(n) or "bin" not in n or n.startswith("cudart"):
+        return 0
+    osw, arch = _system_words()
+    tokens = set(re.split(r"[-_.]", n))
+    if not any(w in tokens for w in osw):
+        return 0
+    if not any(a in tokens for a in arch):
+        # macOS-Pakete nennen die Architektur teils nicht
+        if sys.platform != "darwin":
+            return 0
+    has_gpu = [w for w in _GPU_WORDS if w in n]
+    score = 10
     if sys.platform == "darwin":
-        return [rf"bin-macos-{'arm64' if arm else 'x64'}\.(zip|tar\.gz)$"]
-    arch = "arm64" if arm else "x64"
-    if gpu == "vulkan":
-        return [rf"bin-ubuntu-vulkan-{arch}\.(zip|tar\.gz)$"]
-    return [rf"bin-ubuntu-{arch}\.(zip|tar\.gz)$"]
+        return score + (5 if not has_gpu else 0)
+    if gpu == "cpu":
+        if has_gpu:
+            return 0
+        score += 5 if "cpu" in tokens else 0
+    else:
+        if gpu not in has_gpu:
+            return 0
+        if gpu == "cuda" and re.search(r"cuda-?12", n):
+            score += 3
+    return score
 
 
 def pick_asset(assets: list[dict], gpu: str) -> dict | None:
-    for pat in _asset_patterns(gpu):
-        for a in assets:
-            if re.search(pat, a.get("name", "")):
-                return a
-    return None
+    scored = [(_asset_score(a.get("name", ""), gpu), a) for a in assets]
+    scored = [x for x in scored if x[0] > 0]
+    if not scored:
+        return None
+    return max(scored, key=lambda x: x[0])[1]
+
+
+_API = "https://api.github.com/repos/ggml-org/llama.cpp"
+_WEB = "https://github.com/ggml-org/llama.cpp"
+
+
+def _api_headers() -> dict:
+    h = {"Accept": "application/vnd.github+json"}
+    tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if tok:
+        h["Authorization"] = f"Bearer {tok}"
+    return h
+
+
+def _releases_from_web(limit: int = 8) -> list[dict]:
+    """Ausweichweg ohne GitHub-API (z. B. bei Ratenbegrenzung): Release-Seiten auslesen."""
+    with _open(f"{_WEB}/releases") as r:
+        html = r.read().decode("utf-8", errors="replace")
+    tags: list[str] = []
+    for t in re.findall(r"/ggml-org/llama\.cpp/releases/tag/([^\"?#/<>\s]+)", html):
+        if t not in tags:
+            tags.append(t)
+    releases = []
+    for tag in tags[:limit]:
+        with _open(f"{_WEB}/releases/expanded_assets/{tag}") as r:
+            page = r.read().decode("utf-8", errors="replace")
+        names: list[str] = []
+        for n in re.findall(rf"/ggml-org/llama\.cpp/releases/download/{re.escape(tag)}/([^\"?#<>\s]+)", page):
+            if n not in names:
+                names.append(n)
+        releases.append({"tag_name": tag, "assets": [
+            {"name": urllib.parse.unquote(n), "browser_download_url": f"{_WEB}/releases/download/{tag}/{n}"}
+            for n in names]})
+    return releases
+
+
+def list_llama_releases() -> list[dict]:
+    try:
+        rels = get_json(f"{_API}/releases?per_page=15", _api_headers())
+        if isinstance(rels, list) and rels:
+            return rels
+    except urllib.error.HTTPError as exc:
+        print(f"  GitHub-API nicht nutzbar ({exc.code}) – lese Release-Seite …")
+    return _releases_from_web()
+
+
+def find_llama_asset(gpu: str) -> tuple[dict, dict]:
+    releases = list_llama_releases()
+    for rel in releases:
+        if rel.get("draft"):
+            continue
+        asset = pick_asset(rel.get("assets", []), gpu)
+        if asset:
+            return rel, asset
+    sample = next((r for r in releases if len(r.get("assets", [])) > 3), releases[0] if releases else {})
+    names = "\n    ".join(a.get("name", "") for a in sample.get("assets", [])[:60])
+    raise RuntimeError(f"Kein passendes llama.cpp-Paket für dieses System gefunden "
+                       f"(Release {sample.get('tag_name')}). Verfügbar:\n    {names}")
 
 
 def _extract(archive: Path, dest: Path) -> None:
@@ -189,12 +278,8 @@ def _extract(archive: Path, dest: Path) -> None:
 
 def setup_llama(gpu: str = "cpu") -> Path:
     print("\n== KI-Programm (llama.cpp / llama-server) ==")
-    rel = get_json("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
-    assets = rel.get("assets", []) if isinstance(rel, dict) else []
-    asset = pick_asset(assets, gpu)
-    if asset is None:
-        names = "\n    ".join(a.get("name", "") for a in assets)
-        raise RuntimeError(f"Kein passendes Paket für dieses System gefunden. Verfügbar:\n    {names}")
+    rel, asset = find_llama_asset(gpu)
+    assets = rel.get("assets", [])
     print(f"  Version {rel.get('tag_name')}: {asset['name']}")
     dest = paths.ki_server_dir()
     tmp = paths.ki_dir() / "_download"
@@ -296,12 +381,13 @@ def self_test() -> bool:
 
 def check_sources() -> bool:
     ok = True
-    rel = get_json("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
-    assets = rel.get("assets", []) if isinstance(rel, dict) else []
     for gpu in ("cpu", "vulkan", "cuda"):
-        a = pick_asset(assets, gpu)
-        print(f"  llama.cpp {gpu:6}: {a['name'] if a else 'NICHT GEFUNDEN'}")
-        ok &= a is not None or gpu != "cpu"
+        try:
+            rel, a = find_llama_asset(gpu)
+            print(f"  llama.cpp {gpu:6}: {rel.get('tag_name')} {a['name']}")
+        except RuntimeError as exc:
+            print(f"  llama.cpp {gpu:6}: NICHT GEFUNDEN – {exc}")
+            ok &= gpu != "cpu"
     for key, info in MODELS.items():
         data = get_json(f"https://huggingface.co/api/models/{info['repo']}")
         files = [s["rfilename"] for s in data.get("siblings", [])] if isinstance(data, dict) else []
@@ -335,6 +421,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="nur prüfen, ob alle Download-Quellen erreichbar sind (lädt nichts)")
     args = ap.parse_args(argv)
 
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # Umlaute in der Windows-Konsole
+        except (AttributeError, ValueError):
+            pass
     print(f"Blackline 2 – Einrichtung\nProgrammordner: {paths.app_root()}")
     try:
         if args.test:

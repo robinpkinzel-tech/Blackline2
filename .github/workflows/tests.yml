@@ -26,6 +26,8 @@ jobs:
       - name: OCR-Sprachdaten laden (prüft setup_ki)
         run: python -m blackline2.setup_ki --nur-ocr
       - name: Download-Quellen prüfen
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m blackline2.setup_ki --quellen-pruefen
       - name: Tests
         env:
@@ -53,6 +55,8 @@ jobs:
           path: ki/modelle
           key: ki-modell-schnell-v1
       - name: KI + OCR einrichten (llama.cpp, Modell "schnell")
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m blackline2.setup_ki --modell schnell
       - name: Selbsttest der KI
         run: python -m blackline2.setup_ki --test

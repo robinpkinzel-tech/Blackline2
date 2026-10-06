@@ -88,3 +88,21 @@ def test_server_crash_reported(tmp_path):
     with pytest.raises(AIServerError, match="unerwartet beendet"):
         srv.wait_ready(10)
     srv.stop()
+
+
+class _HallucinatingDetector:
+    """Liefert eine Person, die gar nicht im Text steht, und eine echte."""
+
+    def analyze_page(self, page, page_no, total, doc_name=""):
+        from blackline2.ai.detector import Finding
+        return [Finding("Erika Mustermann", "name", "Erika Mustermann"),
+                Finding("Jens Beispiel", "name", "Jens Beispiel")]
+
+
+def test_hallucinated_person_gets_no_label(page_factory):
+    page = page_factory("Herr Jens Beispiel war anwesend.")
+    reg = PersonRegistry()
+    doc = Document(path=__import__("pathlib").Path("x.pdf"), pdf_bytes=b"", pages=[page])
+    Analyzer(Settings(), UserInputs(), reg, _HallucinatingDetector()).run([doc])
+    assert {(h.label, h.text) for h in doc.hits} == {("Person A", "Jens Beispiel")}
+    assert [p.display for p in reg.persons] == ["Jens Beispiel"]

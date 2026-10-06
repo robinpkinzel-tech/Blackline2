@@ -162,25 +162,28 @@ class Analyzer:
                     report.ai_errors.append(f"{d.name}, Seite {p.index + 1}: {exc}")
                     continue
                 for f in findings:
-                    lab = _label_for_finding(f, self.registry, self.inputs)
-                    if lab is None:
+                    cat0 = SETTINGS_CATEGORY.get(f.kategorie, "sonstiges")
+                    if cat0 != "benutzer" and cat0 not in self.enabled:
                         continue
-                    label, cat = lab
-                    if cat != "benutzer" and cat not in self.enabled:
-                        continue
+                    # erst prüfen, ob die Stelle wirklich im Text steht (keine erfundenen Personen anlegen)
                     found = indexes[key].find(f.text, fuzzy=self.settings.fuzzy_matching,
-                                              possessive=(cat == "name"))
+                                              possessive=(f.kategorie == "name"))
                     if not found and f.kategorie == "name":
                         # z. B. anders umbrochen: einzelne Namensteile suchen
                         for tok in name_tokens(f.text):
                             if len(tok) >= 3:
                                 found += indexes[key].find([tok], fuzzy=len(tok) >= 6,
                                                            possessive=True, require_capital=True)
+                    if not found:
+                        continue
+                    lab = _label_for_finding(f, self.registry, self.inputs)
+                    if lab is None:
+                        continue
+                    label, cat = lab
                     for segs in found:
                         segs = p.trim_segments(segs)
                         new_hits[key].append(Hit(p.index, segs, p.segment_text(segs), label, cat, PRIO_AI))
-                    if found:
-                        spread.append((f, label, cat))
+                    spread.append((f, label, cat))
 
         # 3) KI-Funde auf alle Seiten übertragen (die KI übersieht mal eine Stelle)
         if spread:
