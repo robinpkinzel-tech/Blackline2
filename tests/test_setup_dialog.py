@@ -3,6 +3,7 @@
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -90,7 +91,7 @@ def test_setup_dialog_runs_and_reports(monkeypatch):
         app.processEvents()
         time.sleep(0.02)
     assert done == [True]
-    assert s.model_path == "/pfad/modell.gguf"
+    assert Path(s.model_path) == Path("/pfad/modell.gguf")  # Windows: Backslashes
     assert "Fertig" in dlg.status.text()
     assert "lade" in dlg.log.toPlainText()
     dlg.close()
