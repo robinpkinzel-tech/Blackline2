@@ -96,7 +96,7 @@ def test_export_removes_content(scanned_pdf, tessdata, tmp_path, mode):
     labels = {h.label for h in doc.hits}
     assert {"Mandant", "Adresse Mandant", "Telefon", "E-Mail", "IBAN"} <= labels
     out = tmp_path / f"out_{mode}.pdf"
-    res = export_document(doc, out, mode=mode, dpi=200, tessdata=tessdata)
+    res = export_document(doc, out, mode=mode, dpi=300, tessdata=tessdata)
     assert res.warnings == []
     # Ergebnis erneut per OCR lesen: geschwärzte Inhalte dürfen nicht mehr lesbar sein
     s = Settings()

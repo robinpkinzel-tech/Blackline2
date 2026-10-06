@@ -9,6 +9,14 @@ Blackline 2 liest PDFs und Bilder (auch eingescannte Papierakten), findet mit ei
 Die KI startet mit dem Programm und wird **beim Schließen automatisch beendet** –
 auch wenn das Programm abstürzt oder per Task-Manager beendet wird.
 
+![Funde prüfen](docs/funde.png)
+
+*Farbig markierte Funde zum Prüfen (fiktiver Beispielbrief). Rechts gruppiert nach Kürzel.*
+
+![Vorschau](docs/vorschau.png)
+
+*Vorschau der fertigen Schwärzung: weiß überdeckt, Kürzel in schwarzer Schrift.*
+
 ---
 
 ## Funktionen

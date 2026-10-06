@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import psutil
 import pytest
@@ -29,6 +33,9 @@ def test_server_lifecycle_and_detection(fake_server, page_factory):
         srv.wait_ready(30)
         pid = srv.proc.pid
         assert srv.health()
+        if sys.platform == "win32":  # KI hängt am Job-Objekt (stirbt mit Blackline 2)
+            assert srv._job is not None
+            assert not any("Job-Objekt" in line for line in srv.log)
         # Server lauscht nur lokal und verlangt den Schlüssel
         bad = ChatClient(srv.base_url, api_key="falsch", timeout=10)
         with pytest.raises(AIClientError, match="401"):
@@ -106,3 +113,106 @@ def test_hallucinated_person_gets_no_label(page_factory):
     Analyzer(Settings(), UserInputs(), reg, _HallucinatingDetector()).run([doc])
     assert {(h.label, h.text) for h in doc.hits} == {("Person A", "Jens Beispiel")}
     assert [p.display for p in reg.persons] == ["Jens Beispiel"]
+
+
+def test_finding_filters():
+    clean = AIDetector._clean
+    assert clean({"text": "Herr Dr. Kinzel", "kategorie": "name", "bezug": "Mandant"}).text == "Kinzel"
+    assert clean({"text": "Amtsgericht Limburg", "kategorie": "name", "bezug": ""}) is None
+    assert clean({"text": "kläger", "kategorie": "name", "bezug": ""}) is None
+    assert clean({"text": "der nachbar", "kategorie": "name", "bezug": ""}) is None
+    assert clean({"text": "12345 Musterstadt", "kategorie": "adresse", "bezug": ""}).text == "12345 Musterstadt"
+    assert clean({"text": "x", "kategorie": "quatsch", "bezug": ""}) is None
+    assert clean({"text": "Personalnr. 4711", "kategorie": "quatsch", "bezug": ""}).kategorie == "sonstiges"
+
+
+def test_server_dies_when_app_crashes(fake_server, tmp_path):
+    """Wird Blackline 2 hart beendet (Absturz/Task-Manager), darf die KI nicht weiterlaufen."""
+    exe, model = fake_server
+    root = Path(__file__).resolve().parent.parent
+    code = (
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(root)!r})\n"
+        "from blackline2.ai.server import LocalAIServer\n"
+        f"s = LocalAIServer({str(exe)!r}, {str(model)!r})\n"
+        "s.start(); s.wait_ready(30)\n"
+        "print(s.proc.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    env = dict(os.environ, APPDATA=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path))
+    app = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True, env=env)
+    try:
+        pid = int(app.stdout.readline().strip())
+        procs = [psutil.Process(pid)]
+        time.sleep(1.0)
+        procs += procs[0].children(recursive=True)
+        app.kill()  # harter Absturz von "Blackline 2"
+        app.wait(10)
+        gone, alive = psutil.wait_procs(procs, timeout=15)
+        alive = [p for p in alive if p.status() != psutil.STATUS_ZOMBIE]
+        assert not alive, f"KI-Prozess läuft weiter: {alive}"
+    finally:
+        if app.poll() is None:
+            app.kill()
+
+
+class _ScriptedDetector:
+    """Gibt vorgegebene KI-Funde zurück (simuliert typische Fehler kleiner Modelle)."""
+
+    def __init__(self, findings):
+        self.findings = findings
+
+    def analyze_page(self, page, page_no, total, doc_name=""):
+        from blackline2.ai.detector import AIDetector, Finding
+        out = []
+        for t, k, b in self.findings:
+            f = AIDetector._clean({"text": t, "kategorie": k, "bezug": b})
+            if f:
+                out.append(Finding(f.text, f.kategorie, f.bezug))
+        return out
+
+
+def _run_scripted(page, findings, inputs=None):
+    inputs = inputs or UserInputs()
+    reg = PersonRegistry()
+    doc = Document(path=Path("x.pdf"), pdf_bytes=b"", pages=[page])
+    Analyzer(Settings(), inputs, reg, _ScriptedDetector(findings)).run([doc])
+    return {(h.label, h.text) for h in doc.hits}, reg
+
+
+def test_ai_wrong_party_assignment_is_corrected(page_factory):
+    page = page_factory("Herr Robin Kinzel und die Zeugin Petra Musterfrau, Bahnhofstraße 7, 35578 Wetzlar")
+    hits, reg = _run_scripted(page, [
+        ("Petra Musterfrau", "name", "Mandant"),        # falsch zugeordnet
+        ("Kinzel", "name", "Mandant"),                  # richtig
+        ("Bahnhofstraße 7", "adresse", "Mandant"),      # passt nicht zur angegebenen Adresse
+    ], UserInputs("Robin Kinzel", "Musterweg 15, 12345 Musterstadt"))
+    assert ("Person A", "Petra Musterfrau") in hits
+    assert ("Mandant", "Kinzel") in hits or ("Mandant", "Robin Kinzel") in hits
+    assert ("Adresse", "Bahnhofstraße 7") in hits
+
+
+def test_ai_party_without_user_input_is_not_guessed(page_factory):
+    page = page_factory("Herr Jens Beispiel war da.")
+    hits, _ = _run_scripted(page, [("Jens Beispiel", "name", "Gegner")])
+    assert hits == {("Person A", "Jens Beispiel")}
+
+
+def test_role_words_are_not_name_parts(page_factory):
+    page = page_factory("Die Zeugin Petra Musterfrau sagte aus. Die Zeugin blieb.")
+    hits, reg = _run_scripted(page, [("Zeugin Petra Musterfrau", "name", "Zeugin Petra Musterfrau")])
+    assert ("Person A", "Petra Musterfrau") in hits
+    assert not any(t == "Zeugin" for _l, t in hits)
+    assert "zeugin" not in reg.persons[0].tokens
+
+
+def test_ai_dates_need_birth_context(page_factory):
+    page = page_factory("Frau Muster, geb. 05.05.1960, hat am 12.03.2024 nicht gezahlt. Termin 15.10.2024.")
+    hits, _ = _run_scripted(page, [
+        ("05.05.1960", "geburtsdatum", ""),
+        ("12.03.2024", "geburtsdatum", ""),
+        ("15.10.2024", "sonstiges", ""),
+    ])
+    texts = {t for _l, t in hits}
+    assert "05.05.1960" in texts
+    assert "12.03.2024" not in texts and "15.10.2024" not in texts

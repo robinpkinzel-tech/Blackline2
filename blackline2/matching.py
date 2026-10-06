@@ -29,6 +29,16 @@ NAME_STOP = {
     "von", "van", "vom", "zu", "der", "die", "das", "den", "dem", "de", "la", "le", "di", "da",
     "und", "geb", "verw", "gesch", "rechtsanwalt", "rechtsanwältin", "ra", "rain", "notar",
     "mandant", "mandantin", "gegner", "gegnerin", "kläger", "klägerin", "beklagte", "beklagter",
+    # Rollen und Verwandtschaft – nie Teil eines Namens
+    "zeuge", "zeugin", "nachbar", "nachbarin", "sachverständiger", "sachverständige", "gutachter",
+    "gutachterin", "antragsteller", "antragstellerin", "antragsgegner", "antragsgegnerin", "richter",
+    "richterin", "notarin", "schuldner", "schuldnerin", "gläubiger", "gläubigerin", "ehemann", "ehefrau",
+    "sohn", "tochter", "vater", "mutter", "bruder", "schwester", "kind", "arbeitgeber", "arbeitnehmer",
+    "arbeitnehmerin", "vermieter", "vermieterin", "mieter", "mieterin", "käufer", "käuferin", "verkäufer",
+    "verkäuferin", "geschädigte", "geschädigter", "beschuldigte", "beschuldigter", "angeklagte",
+    "angeklagter", "betroffene", "betroffener", "erblasser", "erblasserin", "erbe", "erbin", "betreuer",
+    "betreuerin", "vormund", "kollege", "kollegin", "kollegen", "partner", "partnerin", "sachbearbeiter",
+    "sachbearbeiterin", "rechtsanwälte", "geschäftsführer", "geschäftsführerin",
 }
 
 

@@ -11,17 +11,19 @@ Reihenfolge / Vorrang bei Überschneidungen:
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Callable
 
 from blackline2.ai.client import AIClientError
 from blackline2.ai.detector import SETTINGS_CATEGORY, AIDetector, Finding
-from blackline2.detect_inputs import UserInputs, detect_inputs, is_organisation, split_values
+from blackline2.detect_inputs import UserInputs, address_parts, detect_inputs, is_organisation, split_values
 from blackline2.detect_patterns import MOBILE_PREFIX, detect_patterns
 from blackline2.labels import CATEGORY_LABELS, PersonRegistry, name_tokens
 from blackline2.loader import Cancelled
-from blackline2.matching import PageIndex, norm
+from blackline2.matching import PageIndex, norm, tokenize, tokens_match
 from blackline2.model import (PRIO_AI, PRIO_AI_SPREAD, PRIO_INPUT_PART, PRIO_MANUAL, Document, Hit, PageData,
                               Segment)
 from blackline2.settings import Settings
@@ -36,11 +38,83 @@ class AnalysisReport:
     hit_count: int = 0
 
 
+_PARTY_WORDS = {"mandant", "mandantin", "mandantschaft", "gegner", "gegnerin", "gegenseite"}
+
+
+def _norm_role(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
+def _names_compatible(text: str, ref: str) -> bool:
+    """Passt die Fundstelle zum genannten Namen (alle Namensteile kommen darin vor)?"""
+    toks, ref_toks = name_tokens(text), name_tokens(ref)
+    return bool(toks) and all(any(tokens_match(t, r) for r in ref_toks) for t in toks)
+
+
+def _party_if_plausible(f: Finding, registry: PersonRegistry, inputs: UserInputs):
+    """KI sagt "Mandant"/"Gegner": nur glauben, wenn der Name zu Ihren Angaben passt."""
+    role = _norm_role(f.bezug)
+    if role not in _PARTY_WORDS:
+        return None
+    party = registry.mandant if role.startswith("mandant") else registry.gegner
+    if not party.tokens:
+        return None  # keine Angabe gemacht -> nicht raten
+    toks = name_tokens(f.text)
+    if toks and all(any(tokens_match(t, pt) for pt in party.tokens) for t in toks):
+        return party
+    return None
+
+
+def _party_address_if_plausible(f: Finding, registry: PersonRegistry, inputs: UserInputs):
+    role = _norm_role(f.bezug)
+    is_m = role.startswith("mandant")
+    party = registry.mandant if is_m else registry.gegner
+    given = inputs.mandant_adresse if is_m else inputs.gegner_adresse
+    if not given.strip():
+        # keine Adresse angegeben: Zuordnung der KI übernehmen, wenn die Partei bekannt ist
+        return party if party.tokens else None
+    want = [tokenize(part) for part in address_parts(given)]
+    got = tokenize(f.text)
+    for part in want:
+        if part and all(any(tokens_match(g, w) for w in part) for g in got):
+            return party
+    return None
+
+
+_DATE_ONLY = re.compile(r"^\s*\d{1,2}\s?\.\s?\d{1,2}\s?\.\s?(\d{2}|\d{4})\s*$|^\s*\d{1,2}\.?\s+\w+\s+\d{4}\s*$")
+_AMOUNT = re.compile(r"^\s*[\d.,]+\s*(€|EUR|Euro)?\s*$", re.I)
+_BIRTH_CONTEXT = re.compile(r"(?i)(geb\.|geboren|geburt\w*|\*)")
+
+
+def _plausible_birthdate(page: PageData, segs: list[Segment], text: str) -> bool:
+    """Datum nur als Geburtsdatum schwärzen, wenn es danach aussieht."""
+    start = page.spans[segs[0].word][0]
+    before = page.text[max(0, start - 50):start]
+    kws = list(_BIRTH_CONTEXT.finditer(before))
+    if kws:
+        tail = before[kws[-1].end():]
+        # Stichwort direkt davor (ohne ein anderes Datum dazwischen)
+        if len(tail) <= 30 and not re.search(r"\d", tail):
+            return True
+    m = re.search(r"(\d{4})\s*$", text) or re.search(r"\.(\d{2})\s*$", text)
+    if not m:
+        return True
+    year = int(m.group(1))
+    if year < 100:
+        year += 2000 if year <= date.today().year % 100 else 1900
+    return year <= date.today().year - 14
+
+
 def _label_for_finding(f: Finding, registry: PersonRegistry, inputs: UserInputs) -> tuple[str, str] | None:
     """-> (Kürzel, Kategorie) oder None."""
     k = f.kategorie
     if k == "name":
-        person = registry.resolve(f.bezug or f.text) or registry.resolve(f.text)
+        person = _party_if_plausible(f, registry, inputs)
+        if person is None:
+            # Name selbst entscheidet (bekannte Person per Namensteilen, sonst neue Person)
+            ref = f.bezug if f.bezug and _norm_role(f.bezug) not in _PARTY_WORDS else ""
+            person = (registry.resolve(ref) if ref and _names_compatible(f.text, ref) else None) \
+                or registry.resolve(f.text)
         if person is None:
             return None
         # Namensangabe ist Teil des Personennamens -> Schreibweise merken
@@ -48,7 +122,11 @@ def _label_for_finding(f: Finding, registry: PersonRegistry, inputs: UserInputs)
             person.add_name(f.text)
         return person.label, "name"
     if k == "adresse":
-        person = registry.resolve(f.bezug, create=False) if f.bezug else None
+        person = None
+        if f.bezug and _norm_role(f.bezug) in _PARTY_WORDS:
+            person = _party_address_if_plausible(f, registry, inputs)
+        elif f.bezug:
+            person = registry.resolve(f.bezug, create=False)
         return (person.address_label if person else CATEGORY_LABELS["adresse"]), "adresse"
     if k == "benutzer":
         terms = inputs.custom_terms()
@@ -174,6 +252,10 @@ class Analyzer:
                             if len(tok) >= 3:
                                 found += indexes[key].find([tok], fuzzy=len(tok) >= 6,
                                                            possessive=True, require_capital=True)
+                    if f.kategorie == "geburtsdatum":
+                        found = [sg for sg in found if _plausible_birthdate(p, sg, f.text)]
+                    if f.kategorie == "sonstiges" and (_DATE_ONLY.match(f.text) or _AMOUNT.match(f.text)):
+                        found = []
                     if not found:
                         continue
                     lab = _label_for_finding(f, self.registry, self.inputs)

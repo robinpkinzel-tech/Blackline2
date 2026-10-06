@@ -10,9 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from blackline2.ai.client import AIClientError, ChatClient
-from blackline2.detect_inputs import UserInputs, split_values
+from blackline2.detect_inputs import UserInputs, is_organisation, split_values
 from blackline2.labels import PersonRegistry
-from blackline2.matching import norm
+from blackline2.matching import NAME_STOP, norm
 from blackline2.model import PageData
 
 AI_CATEGORIES = [
@@ -72,13 +72,13 @@ Kategorien:
 NICHT angeben:
 - Gerichte, Behörden, Firmen, Banken, Versicherungen, Kanzleien als solche (z. B. "Amtsgericht Limburg", "Allianz AG"). Steckt in einem Firmennamen der Name einer Person, nur den Personennamen angeben.
 - Rollen und Anreden: Kläger, Beklagter, Mandant, Zeuge, Sachverständiger, Herr, Frau, Dr.
-- Gesetze, Paragraphen, Aktenzeichen, Geldbeträge, gewöhnliche Datumsangaben (Schreiben vom …, Fristen, Termine).
+- Gesetze, Paragraphen, Aktenzeichen, Geldbeträge, gewöhnliche Datumsangaben (Schreiben vom …, Zahlungs-, Vertrags-, Unfalldaten, Fristen, Termine). Ein Datum ist nur dann ein Geburtsdatum, wenn es eindeutig als Geburtsdatum erkennbar ist.
 - Orte ohne Bezug zu einer Privatanschrift (Gerichtsort, "in Limburg").
 {professionals}
 Für jeden Fund:
 - "text": die Fundstelle WÖRTLICH wie im Text (auch mit OCR-Fehlern – nichts korrigieren, nichts ergänzen). Nur die zu schwärzende Angabe ohne Anrede oder Titel ("Kinzel", nicht "Herr Kinzel"). Jede unterschiedliche Schreibweise einmal angeben.
 - "kategorie": eine der Kategorien oben.
-- "bezug": wem die Angabe gehört: "Mandant", "Gegner" oder der vollständige Name der Person (z. B. "Erika Mustermann"); bei Kategorie benutzer der zugehörige Suchbegriff; sonst "".
+- "bezug": wem die Angabe gehört: "Mandant" bzw. "Gegner" NUR, wenn es genau die oben genannte Person ist; bei allen anderen Personen deren vollständiger Name (z. B. "Erika Mustermann"); bei Kategorie benutzer der zugehörige Suchbegriff; sonst "".
 
 Beispiel (Mandant: Robin Kinzel):
 Text: "Sehr geehrter Herr Dr. Kinzel, Ihre Nachbarin Frau Erika Mustermann (geb. 05.05.1960), Hauptstr. 3, 12345 Musterstadt, Tel. 0171 2345678, hat am 01.02.2024 beim Amtsgericht Limburg (Az. 2 C 123/24) Klage erhoben. Gez. E. Mustermann"
@@ -180,11 +180,15 @@ class AIDetector:
         if len(n) < 2 or n in _REJECT:
             return None
         if kat == "name":
-            # Anreden/Titel vorne abschneiden, Namen enthalten keine Ziffern
-            for prefix in ("herrn ", "herr ", "frau ", "dr. ", "prof. "):
-                if text.lower().startswith(prefix):
-                    text = text[len(prefix):].strip()
+            # Anreden, Titel und Rollen vorne abschneiden ("Zeugin Dr. Petra Muster" -> "Petra Muster")
+            words = text.split()
+            while words and norm(words[0]) in NAME_STOP:
+                words.pop(0)
+            text = " ".join(words)
             if any(c.isdigit() for c in text) or len(norm(text)) < 2:
+                return None
+            # Namen werden großgeschrieben; Gerichte/Firmen/Behörden sind keine Personen
+            if not any(c.isupper() for c in text) or is_organisation(text):
                 return None
         return Finding(text, kat, bezug)
 
