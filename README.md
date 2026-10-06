@@ -13,6 +13,14 @@ auch wenn das Programm abstürzt oder per Task-Manager beendet wird.
 
 *Farbig markierte Funde zum Prüfen (fiktiver Beispielbrief). Rechts gruppiert nach Kürzel.*
 
+![Rückfragen](docs/rueckfragen.png)
+
+*Rückfrage der KI (orange gepunktet): „Hans Meier – Titel, evtl. Berufsträger“. Die Antwort gilt für alle Stellen in allen Dokumenten.*
+
+![Ungelesene Bereiche](docs/ungelesen.png)
+
+*Gelb gestrichelt: Handschrift und Unterschrift, die keine Texterkennung lesen kann – zum Prüfen und Schwärzen per Klick.*
+
 ![Vorschau](docs/vorschau.png)
 
 *Vorschau der fertigen Schwärzung: weiß überdeckt, Kürzel in schwarzer Schrift.*
@@ -28,11 +36,19 @@ auch wenn das Programm abstürzt oder per Task-Manager beendet wird.
 | **KI** | Liest jede Seite vollständig und meldet alle Namen und persönlichen Daten natürlicher Personen. Jede Person bekommt ein festes Kürzel (Person A, Person B …), das in allen Dokumenten des Vorgangs gleich bleibt. Was die KI auf einer Seite findet, wird automatisch auch auf allen anderen Seiten geschwärzt. Erfundene Funde („Halluzinationen“) werden verworfen, weil nur geschwärzt wird, was wirklich im Text steht. |
 | **Sicherheitsnetz für Namen** | Unabhängig von der KI gilt jedes Wort nach Anreden und Rollen („Herr“, „Frau“, „Dr.“, „Zeugin“, „Nachbarin“, „Kläger“ …) als Name – auch im Anschriftenfeld („Herrn“ / nächste Zeile). So bleibt kein Name stehen, nur weil die KI ihn übersehen hat. |
 | **Feste Regeln** | E-Mail, Telefon/Handy/Fax, IBAN (mit Prüfziffer) und Kontonummern, Sozialversicherungs-/Renten-/Krankenversichertennummern, Versicherungsscheinnummern, Geburtsdaten („geb.“, „geb. am“, „geboren am“, „Geburtsdatum:“, „\*“), Geburtsort und Geburtsname. |
-| **Prüfen** | Alle Funde farbig markiert, Klick schaltet einzelne Stellen ab/an, Liste nach Kürzel gruppiert, Kürzel umbenennbar, fehlende Stellen per Maus manuell aufziehen, Vorschau des Endergebnisses. |
+| **Rückfragen der KI** | Ist sich die KI nicht sicher (z. B. Rechtsanwalt der Gegenseite, Firmenname mit Personenname, Ort ohne klaren Wohnortbezug), stellt sie eine Rückfrage mit kurzer Begründung. Ihre Antwort „Schwärzen“ / „Nicht schwärzen“ gilt sofort für **alle gleichen Stellen in allen geladenen Dokumenten**. |
+| **Entscheidungen gelten überall** | Klick auf eine Markierung schaltet alle gleichen Stellen in allen Dokumenten um (gleiche Person bzw. gleicher Text). Strg+Klick ändert nur die eine Stelle. |
+| **Nachträglich schwärzen** | Rechtsklick auf ein beliebiges Wort → „überall schwärzen als …“: Der Begriff wird sofort in allen Dokumenten gesucht und geschwärzt – ohne die KI erneut laufen zu lassen. Auch beim manuellen Aufziehen eines Bereichs wird der enthaltene Text auf Wunsch überall gesucht. |
+| **Ungelesene Bereiche** | Handschrift, Unterschriften und Stempel kann keine Texterkennung lesen – und damit auch die KI nicht. Blackline 2 erkennt solche Tintenbereiche und zeigt sie gelb gestrichelt an („bitte ansehen“). Ein Klick schwärzt den Bereich. |
+| **Prüfen** | Alle Funde farbig markiert, Liste nach Kürzel gruppiert (mit Gesamtzahl über alle Dokumente), Kürzel umbenennbar, Vorschau des Endergebnisses, Restzeitanzeige bei langen Analysen. |
+| **Vorgang sichern** | Menü „Datei → Vorgang sichern“ speichert Funde, Eingaben und Personen in eine `.blackline2`-Datei (enthält Mandantendaten – vertraulich behandeln). Beim Laden werden die Dokumente neu eingelesen und die Entscheidungen wiederhergestellt. |
 | **Speichern** | Standard „Bild-PDF“: Jede Seite wird als Bild neu aufgebaut, die Bildpunkte unter den Schwärzungen werden überschrieben – es bleibt nichts Verstecktes übrig. Alternativ „Text-PDF“ (durchsuchbar) mit echter PDF-Redaction und automatischer Nachprüfung. Namen im **Dateinamen** werden ebenfalls durch Kürzel ersetzt („Kinzel_Klage.pdf“ → „Mandant_Klage_geschwärzt.pdf“). Das Original wird nie verändert. |
 
-Unterstützte Dateien: PDF, PNG, JPG, TIFF (auch mehrseitig), BMP, GIF, WEBP.
-Word-Dateien folgen im nächsten Schritt.
+Unterstützte Dateien: PDF, PNG, JPG, TIFF (auch mehrseitig), BMP, GIF, WEBP sowie
+**Word (.docx, .doc), .odt und .rtf**. Word-Dateien werden über ein installiertes
+Microsoft Word, sonst über LibreOffice in PDF umgewandelt; ist beides nicht vorhanden,
+wird der Text in vereinfachter Darstellung gesetzt. Das Ergebnis ist immer ein PDF,
+die Word-Datei bleibt unverändert.
 
 ---
 
@@ -86,9 +102,16 @@ Eigenes Modell: Jede `.gguf`-Datei in `ki\modelle\` kann verwendet werden
    * Bis zu 5 freie Begriffe, z. B. `Volkswagen` → `Arbeitgeber`
 3. **Analysieren** – Regeln und KI laufen über alle Seiten aller Dokumente.
 4. **Funde prüfen** (Reiter „2. Funde prüfen“):
-   * Markierung anklicken = diese Stelle nicht schwärzen (gestrichelt) / wieder schwärzen
+   * Oben: **Rückfragen der KI** anklicken und mit „Schwärzen“ / „Nicht schwärzen“ beantworten –
+     gilt für alle gleichen Stellen in allen Dokumenten
+   * Gelbe Hinweiszeile: **ungelesene Bereiche** (Handschrift, Stempel) mit „Anzeigen“ ansehen;
+     Klick auf den gelben Rahmen schwärzt ihn
+   * Markierung anklicken = überall nicht schwärzen (gestrichelt) / wieder schwärzen;
+     **Strg+Klick** = nur diese Stelle
+   * **Rechtsklick auf ein Wort** = nachträglich überall schwärzen, Kürzel wählen
    * Rechtsklick in der Liste = Kürzel ändern (z. B. „Person A“ → „Zeuge 1“)
-   * „Bereich manuell schwärzen“ = fehlende Stelle mit der Maus aufziehen
+   * „Bereich manuell schwärzen“ = fehlende Stelle mit der Maus aufziehen (enthaltener Text wird
+     auf Wunsch überall gesucht)
    * „Vorschau Schwärzung“ = so sieht das Ergebnis aus
 5. **Geschwärzt speichern** – Zielordner wählen; Dateien erhalten den Zusatz `_geschwärzt`.
 
@@ -147,11 +170,13 @@ Aufbau:
 
 ```
 blackline2/
-  loader.py          PDF/Bilder laden, Seitendrehung normalisieren, OCR je Seite (parallel)
-  ocr.py             Vorverarbeitung (Begradigen, Ausleuchtung, Ausrichtung) + Tesseract via PyMuPDF
+  loader.py          PDF/Bilder/Word laden, Seitendrehung normalisieren, OCR je Seite (parallel)
+  ocr.py             Vorverarbeitung, Tesseract via PyMuPDF, Nachlese, ungelesene Bereiche
   matching.py        tolerante Suche (OCR-Fehler, Silbentrennung, Genitiv, Straße/Str.)
   detect_patterns.py feste Regeln (E-Mail, Telefon, IBAN, Versicherungsnr., Geburtsdatum)
   detect_inputs.py   Mandant/Gegner/freie Begriffe
+  detect_names.py    Sicherheitsnetz: Namen nach Anreden und Rollen
+  session.py         Vorgang sichern/laden (.blackline2)
   labels.py          Kürzel und Personenverwaltung (Person A, B, …)
   ai/server.py       Start/Stopp von llama-server (Job-Objekt, PDEATHSIG, Wächter)
   ai/client.py       OpenAI-kompatibler Client (nur localhost)
@@ -168,5 +193,6 @@ Durchlauf Scan → OCR → KI → Schwärzung → erneute OCR-Prüfung des Ergeb
 
 ## Nächste Schritte
 
-* Word-Dateien (.docx) einlesen
 * Fertige Windows-Installation als einzelne .exe (PyInstaller)
+* Tabellen mit Spaltenüberschriften („Geburtsdatum“ über einer Spalte) regelbasiert erkennen
+* Durchlauf mit dem Standardmodell „ausgewogen“ in der CI (manuell über „Run workflow“ wählbar)

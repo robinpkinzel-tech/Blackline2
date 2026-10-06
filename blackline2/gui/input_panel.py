@@ -99,6 +99,15 @@ class InputPanel(QScrollArea):
             custom=[(t.text(), l.text()) for t, l in self.custom if t.text().strip()],
         )
 
+    def set_inputs(self, ui: UserInputs) -> None:
+        self.mandant_name.setText(ui.mandant_name)
+        self.mandant_adresse.setText(ui.mandant_adresse)
+        self.gegner_name.setText(ui.gegner_name)
+        self.gegner_adresse.setText(ui.gegner_adresse)
+        for (t, l), pair in zip(self.custom, list(ui.custom) + [("", "")] * CUSTOM_ROWS, strict=False):
+            t.setText(pair[0])
+            l.setText(pair[1])
+
     def clear(self) -> None:
         for w in (self.mandant_name, self.mandant_adresse, self.gegner_name, self.gegner_adresse):
             w.clear()

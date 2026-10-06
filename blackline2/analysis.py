@@ -25,7 +25,8 @@ from blackline2.detect_patterns import MOBILE_PREFIX, detect_patterns
 from blackline2.labels import CATEGORY_LABELS, PersonRegistry, name_tokens
 from blackline2.loader import Cancelled
 from blackline2.matching import PageIndex, norm, tokenize, tokens_match
-from blackline2.model import PRIO_AI, PRIO_AI_SPREAD, PRIO_INPUT_PART, PRIO_MANUAL, Document, Hit, PageData, Segment
+from blackline2.model import (PRIO_AI, PRIO_AI_SPREAD, PRIO_INPUT_PART, PRIO_MANUAL, PRIO_USER_TERM, Document, Hit,
+                              PageData, Segment)
 from blackline2.settings import Settings
 
 ProgressFn = Callable[[int, int, str], None]
@@ -164,9 +165,25 @@ def _subtract(c0: int, c1: int, taken: list[tuple[int, int]]) -> list[tuple[int,
     return parts
 
 
+def _absorb_shorter(hits: list[Hit]) -> list[Hit]:
+    """Gleiches Kürzel, kürzerer Fund liegt ganz im längeren ("Meier" in "Hans Meier") -> nur den längeren."""
+    words = [frozenset(s.word for s in h.segments) for h in hits]
+    keep = [True] * len(hits)
+    for i, hi in enumerate(hits):
+        for j, hj in enumerate(hits):
+            if i == j or not keep[j] or hi.label != hj.label or not hi.segments or not hj.segments:
+                continue
+            if words[j] < words[i]:  # echte Teilmenge
+                keep[j] = False
+                if hj.question and not hi.question:
+                    hi.question = hj.question
+                hi.priority = min(hi.priority, hj.priority)
+    return [h for h, k in zip(hits, keep, strict=False) if k]
+
+
 def resolve_overlaps(page: PageData, hits: list[Hit]) -> list[Hit]:
     """Jede Textstelle bekommt genau ein Kürzel (das mit dem höchsten Vorrang)."""
-    hits = sorted(hits, key=lambda h: (h.priority, -len(h.segments)))
+    hits = sorted(_absorb_shorter(hits), key=lambda h: (h.priority, -len(h.segments)))
     taken: dict[int, list[tuple[int, int]]] = {}
     out: list[Hit] = []
     for h in hits:
@@ -268,13 +285,15 @@ class Analyzer:
                     if lab is None:
                         continue
                     label, cat = lab
+                    question = f.hinweis or "KI unsicher" if f.unsicher else ""
                     for segs in found:
                         segs = p.trim_segments(segs)
-                        new_hits[key].append(Hit(p.index, segs, p.segment_text(segs), label, cat, PRIO_AI))
+                        new_hits[key].append(Hit(p.index, segs, p.segment_text(segs), label, cat, PRIO_AI,
+                                                 question=question))
                     spread.append((f, label, cat))
 
-        # 3) KI-Funde auf alle Seiten übertragen (die KI übersieht mal eine Stelle)
-        if spread:
+        # 3) KI-Funde und per Anrede gefundene Personen auf alle Seiten übertragen
+        if spread or self.registry.persons:
             self._spread(pages, indexes, new_hits, spread)
 
         # 4) Namensteile, die mehreren Personen gehören (gleicher Nachname) kennzeichnen
@@ -282,13 +301,15 @@ class Analyzer:
 
         # 5) Zusammenführen
         for d in docs:
-            manual = [h for h in d.hits if h.priority == PRIO_MANUAL]
+            manual = [h for h in d.hits if h.priority in (PRIO_MANUAL, PRIO_USER_TERM)]
             hits: list[Hit] = []
             for p in d.pages:
-                hits += resolve_overlaps(p, new_hits[(id(d), p.index)])
-            d.hits = manual + hits
+                hits += resolve_overlaps(p, new_hits[(id(d), p.index)] + [h for h in manual if h.page == p.index
+                                                                            and h.segments])
+            d.hits = [h for h in manual if not h.segments] + hits
             d.analyzed = True
             report.hit_count += len(d.hits)
+        assign_groups(docs)
         return report
 
     def _mark_shared_tokens(self, new_hits: dict[tuple[int, int], list[Hit]]) -> None:
@@ -313,10 +334,14 @@ class Analyzer:
                         break
 
     def _spread(self, pages, indexes, new_hits, spread) -> None:
-        phrases: dict[tuple[str, str], tuple[str, str]] = {}
+        phrases: dict[tuple[str, str], tuple[str, str, str]] = {}
         token_owner: dict[str, set[str]] = {}
+        questions: dict[str, str] = {}  # Kürzel -> Rückfrage (Person als Ganzes unsicher)
         for f, label, cat in spread:
-            phrases.setdefault((norm(f.text), label), (f.text, cat))
+            q = (f.hinweis or "KI unsicher") if f.unsicher else ""
+            phrases.setdefault((norm(f.text), label), (f.text, cat, q))
+            if q and cat == "name":
+                questions.setdefault(label, q)
         # Namensteile aller von der KI gefundenen Personen
         for person in self.registry.persons:
             if any(is_organisation(n) for n in person.names):
@@ -327,14 +352,86 @@ class Analyzer:
         for d, p in pages:
             key = (id(d), p.index)
             idx = indexes[key]
-            for (_n, label), (text, cat) in phrases.items():
+            for (_n, label), (text, cat, q) in phrases.items():
                 for segs in idx.find(text, fuzzy=self.settings.fuzzy_matching, possessive=(cat == "name")):
                     segs = p.trim_segments(segs)
-                    new_hits[key].append(Hit(p.index, segs, p.segment_text(segs), label, cat, PRIO_AI_SPREAD))
+                    new_hits[key].append(Hit(p.index, segs, p.segment_text(segs), label, cat, PRIO_AI_SPREAD,
+                                             question=q))
             if "name" in self.enabled:
                 for tok, owners in token_owner.items():
                     label = "/".join(sorted(owners))
+                    q = questions.get(label, "") if len(owners) == 1 else ""
                     for segs in idx.find([tok], fuzzy=len(tok) >= 6, possessive=True, require_capital=True):
                         segs = p.trim_segments(segs)
                         new_hits[key].append(Hit(p.index, segs, p.segment_text(segs), label, "name",
-                                                 PRIO_AI_SPREAD))
+                                                 PRIO_AI_SPREAD, question=q))
+
+
+# ---------------------------------------------------------------- Gruppen und nachträgliche Änderungen
+
+def hit_group(h: Hit) -> str:
+    """Schlüssel für 'gleiche Funde': bei Namen die Person, sonst der normalisierte Text."""
+    if not h.segments:
+        return ""
+    if h.category == "name":
+        return "name|" + h.label
+    return f"{h.category}|{norm(' '.join(h.text.split()))}"
+
+
+def assign_groups(docs: list[Document]) -> None:
+    for d in docs:
+        for h in d.hits:
+            h.group = hit_group(h)
+    # Rückfrage einer Gruppe gilt für alle ihre Stellen
+    questions: dict[str, str] = {}
+    for d in docs:
+        for h in d.hits:
+            if h.group and h.question:
+                questions.setdefault(h.group, h.question)
+    for d in docs:
+        for h in d.hits:
+            if h.group in questions and not h.question:
+                h.question = questions[h.group]
+
+
+def group_members(docs: list[Document], group: str) -> list[tuple[Document, Hit]]:
+    if not group:
+        return []
+    return [(d, h) for d in docs for h in d.hits if h.group == group]
+
+
+def set_group_enabled(docs: list[Document], group: str, enabled: bool) -> int:
+    members = group_members(docs, group)
+    for _d, h in members:
+        h.enabled = enabled
+    return len(members)
+
+
+def merge_page_hits(page: PageData, hits: list[Hit]) -> list[Hit]:
+    """Vorhandene und neue Funde einer Seite zusammenführen (Vorrang, keine Doppelschwärzung)."""
+    rect_only = [h for h in hits if not h.segments]
+    return rect_only + resolve_overlaps(page, [h for h in hits if h.segments])
+
+
+def apply_user_term(docs: list[Document], term: str, label: str, fuzzy: bool = True,
+                    category: str = "benutzer") -> int:
+    """Begriff nachträglich in allen Dokumenten suchen und schwärzen (ohne KI-Neulauf)."""
+    term = " ".join(term.split())
+    if not term:
+        return 0
+    single = len(term.split()) == 1
+    added = 0
+    for d in docs:
+        for p in d.pages:
+            idx = PageIndex(p)
+            new: list[Hit] = []
+            for segs in idx.find(term, fuzzy=fuzzy and len(norm(term)) >= 5, possessive=single,
+                                 require_capital=False):
+                segs = p.trim_segments(segs)
+                new.append(Hit(p.index, segs, p.segment_text(segs), label, category, PRIO_USER_TERM))
+            if new:
+                others = [h for h in d.hits if h.page != p.index]
+                d.hits = others + merge_page_hits(p, d.hits_on(p.index) + new)
+                added += len(new)
+    assign_groups(docs)
+    return added

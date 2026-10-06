@@ -1,4 +1,11 @@
-"""Seitenansicht mit farbig markierten Funden bzw. Vorschau der fertigen Schwärzung."""
+"""Seitenansicht mit farbig markierten Funden bzw. Vorschau der fertigen Schwärzung.
+
+Bedienung:
+  * Klick auf eine Markierung      -> überall (alle Dokumente) aus-/einschalten
+  * Strg + Klick                   -> nur diese eine Stelle
+  * Rechtsklick auf Wort/Markierung -> Menü (überall schwärzen, Kürzel ändern …)
+  * Gelb gestrichelt               -> ungelesener Bereich (Handschrift, Stempel); Klick = schwärzen
+"""
 
 from __future__ import annotations
 
@@ -8,7 +15,7 @@ from PySide6.QtWidgets import (QGraphicsItem, QGraphicsPixmapItem, QGraphicsRect
                                QGraphicsSimpleTextItem, QGraphicsView)
 
 from blackline2.labels import short_label
-from blackline2.model import Hit
+from blackline2.model import Hit, Rect
 
 RENDER_DPI = 144
 
@@ -24,6 +31,7 @@ CATEGORY_COLORS = {
     "sonstiges": QColor(110, 110, 110),
     "manuell": QColor(20, 20, 20),
 }
+UNREAD_COLOR = QColor(255, 170, 0)
 
 
 def color_for(category: str) -> QColor:
@@ -35,8 +43,12 @@ class HitItem(QGraphicsRectItem):
         super().__init__(rect)
         self.hit = hit
         self.setAcceptHoverEvents(True)
-        self.setToolTip(f"{hit.label}\n„{hit.text}“\nQuelle: {hit.source}\n"
-                        + ("Klicken = nicht schwärzen" if hit.enabled else "Klicken = doch schwärzen"))
+        tip = f"{hit.label}\n„{hit.text}“\nQuelle: {hit.source}"
+        if hit.question:
+            tip += f"\n❓ Rückfrage: {hit.question}"
+        tip += ("\n\nKlick = überall nicht schwärzen" if hit.enabled else "\n\nKlick = überall doch schwärzen")
+        tip += "\nStrg+Klick = nur diese Stelle · Rechtsklick = Menü"
+        self.setToolTip(tip)
         if preview:
             self.setPen(QPen(Qt.PenStyle.NoPen))
             self.setBrush(QBrush(Qt.GlobalColor.white))
@@ -50,15 +62,34 @@ class HitItem(QGraphicsRectItem):
         else:
             pen = QPen(QColor(150, 150, 150), 0.8, Qt.PenStyle.DashLine)
             self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        if hit.question:
+            pen = QPen(QColor(230, 120, 0), 1.6, Qt.PenStyle.DotLine)
         if highlight:
             pen = QPen(QColor(255, 200, 0), 2.5)
         pen.setCosmetic(False)
         self.setPen(pen)
 
 
+class UnreadItem(QGraphicsRectItem):
+    def __init__(self, index: int, rect: QRectF):
+        super().__init__(rect)
+        self.index = index
+        self.setToolTip("Ungelesener Bereich (Handschrift, Unterschrift, Stempel?)\n"
+                        "Texterkennung und KI können hier nichts lesen.\nKlick = Bereich schwärzen")
+        pen = QPen(UNREAD_COLOR, 1.6, Qt.PenStyle.DashLine)
+        pen.setCosmetic(False)
+        self.setPen(pen)
+        fill = QColor(UNREAD_COLOR)
+        fill.setAlpha(28)
+        self.setBrush(QBrush(fill))
+        self.setZValue(1)
+
+
 class PageView(QGraphicsView):
-    hit_toggled = Signal(int)
+    hit_toggled = Signal(int, bool)          # hit_id, überall?
     rect_drawn = Signal(QRectF)
+    unread_clicked = Signal(int)
+    context_requested = Signal(float, float, int, object)  # x, y (Seite), hit_id oder -1, globale Position
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -72,7 +103,6 @@ class PageView(QGraphicsView):
         self._drag_start: QPointF | None = None
         self._rubber: QGraphicsRectItem | None = None
         self._page_rect = QRectF()
-        self._fit_pending = True
         self._zoom_fit = True
 
     # ------------------------------------------------------------ Anzeige
@@ -84,7 +114,7 @@ class PageView(QGraphicsView):
         self._page_rect = QRectF()
 
     def show_page(self, pixmap: QPixmap | None, width: float, height: float, hits: list[Hit],
-                  preview: bool, highlight_id: int | None = None) -> None:
+                  preview: bool, highlight_id: int | None = None, unread: list[Rect] | None = None) -> None:
         scene = self.scene()
         scene.clear()
         self._rubber = None
@@ -104,9 +134,13 @@ class PageView(QGraphicsView):
             for x0, y0, x1, y1 in h.rects:
                 r = QRectF(x0, y0, x1 - x0, y1 - y0)
                 it = HitItem(h, r, preview, h.id == highlight_id)
+                it.setZValue(2)
                 scene.addItem(it)
                 if preview:
                     self._add_label(r, h.label)
+        if unread and not preview:
+            for i, (x0, y0, x1, y1) in enumerate(unread):
+                scene.addItem(UnreadItem(i, QRectF(x0, y0, x1 - x0, y1 - y0)))
         if self._zoom_fit:
             self.fit_width()
 
@@ -134,6 +168,10 @@ class PageView(QGraphicsView):
         if hit.rects:
             x0, y0, x1, y1 = hit.rects[0]
             self.centerOn(QPointF((x0 + x1) / 2, (y0 + y1) / 2))
+
+    def center_on_rect(self, rect: Rect) -> None:
+        x0, y0, x1, y1 = rect
+        self.centerOn(QPointF((x0 + x1) / 2, (y0 + y1) / 2))
 
     # ------------------------------------------------------------ Zoom
     def fit_width(self) -> None:
@@ -169,6 +207,14 @@ class PageView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.NoDrag if on else QGraphicsView.DragMode.ScrollHandDrag)
         self.viewport().setCursor(Qt.CursorShape.CrossCursor if on else Qt.CursorShape.OpenHandCursor)
 
+    def _item_at(self, pos, cls):
+        for item in self.items(pos):
+            while item is not None and not isinstance(item, cls):
+                item = item.parentItem() if isinstance(item, QGraphicsItem) else None
+            if isinstance(item, cls):
+                return item
+        return None
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             if self.manual_mode:
@@ -179,14 +225,29 @@ class PageView(QGraphicsView):
                 self._rubber.setZValue(10)
                 event.accept()
                 return
-            item = self.itemAt(event.position().toPoint())
-            while item is not None and not isinstance(item, HitItem):
-                item = item.parentItem() if isinstance(item, QGraphicsItem) else None
-            if isinstance(item, HitItem):
-                self.hit_toggled.emit(item.hit.id)
+            pos = event.position().toPoint()
+            hit_item = self._item_at(pos, HitItem)
+            if hit_item is not None:
+                everywhere = not (event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                self.hit_toggled.emit(hit_item.hit.id, everywhere)
+                event.accept()
+                return
+            unread_item = self._item_at(pos, UnreadItem)
+            if unread_item is not None:
+                self.unread_clicked.emit(unread_item.index)
                 event.accept()
                 return
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        if self._page_rect.isEmpty():
+            return
+        pos = event.pos()
+        scene_pos = self.mapToScene(pos)
+        hit_item = self._item_at(pos, HitItem)
+        self.context_requested.emit(scene_pos.x(), scene_pos.y(),
+                                    hit_item.hit.id if hit_item else -1, event.globalPos())
+        event.accept()
 
     def mouseMoveEvent(self, event) -> None:
         if self.manual_mode and self._drag_start is not None and self._rubber is not None:

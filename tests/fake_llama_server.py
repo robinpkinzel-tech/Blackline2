@@ -19,7 +19,9 @@ def findings(text: str) -> list[dict]:
     out = []
     for m in NAME.finditer(text):
         name = m.group(1).replace("Dr. ", "")
-        out.append({"text": name, "kategorie": "name", "bezug": name})
+        unsicher = "Dr." in m.group(1)  # Titel -> Berufsträger? -> Rückfrage
+        out.append({"text": name, "kategorie": "name", "bezug": name,
+                    "unsicher": unsicher, "hinweis": "Titel, evtl. Berufsträger" if unsicher else ""})
     return out
 
 

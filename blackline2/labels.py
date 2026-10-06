@@ -185,6 +185,13 @@ class PersonRegistry:
         self.persons.append(p)
         return p
 
+    def restore(self, persons: list[Person]) -> None:
+        """Gespeicherte Personen übernehmen; Buchstaben für neue Personen danach fortsetzen."""
+        self.persons = list(persons)
+        used = {p.label for p in persons}
+        self._letters = _letters()
+        self._letters = (c for c in self._letters if f"Person {c}" not in used)
+
     def rename(self, old: str, new: str) -> None:
         for p in self.all():
             if p.label == old:

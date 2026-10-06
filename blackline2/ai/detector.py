@@ -39,8 +39,10 @@ SCHEMA = {
                     "text": {"type": "string"},
                     "kategorie": {"type": "string", "enum": AI_CATEGORIES},
                     "bezug": {"type": "string"},
+                    "unsicher": {"type": "boolean"},
+                    "hinweis": {"type": "string"},
                 },
-                "required": ["text", "kategorie", "bezug"],
+                "required": ["text", "kategorie", "bezug", "unsicher", "hinweis"],
                 "additionalProperties": False,
             },
         }
@@ -79,10 +81,13 @@ Für jeden Fund:
 - "text": die Fundstelle WÖRTLICH wie im Text (auch mit OCR-Fehlern – nichts korrigieren, nichts ergänzen). Nur die zu schwärzende Angabe ohne Anrede oder Titel ("Kinzel", nicht "Herr Kinzel"). Jede unterschiedliche Schreibweise einmal angeben.
 - "kategorie": eine der Kategorien oben.
 - "bezug": wem die Angabe gehört: "Mandant" bzw. "Gegner" NUR, wenn es genau die oben genannte Person ist; bei allen anderen Personen deren vollständiger Name (z. B. "Erika Mustermann"); bei Kategorie benutzer der zugehörige Suchbegriff; sonst "".
+- "unsicher": true, wenn ein Mensch entscheiden sollte, ob die Stelle geschwärzt wird – z. B. Richter, Anwälte, Notare oder Behördenmitarbeiter in dienstlicher Funktion; Firmen- oder Kanzleinamen, die einen Personennamen enthalten; Orte, bei denen unklar ist, ob es ein Wohnort ist; Angaben, bei denen unklar ist, ob sie eine natürliche Person betreffen. Sonst false. Im Zweifel die Stelle trotzdem angeben und unsicher=true setzen.
+- "hinweis": bei unsicher=true eine kurze Begründung (höchstens 8 Wörter, z. B. "Rechtsanwalt der Gegenseite, dienstlich genannt"), sonst "".
 
 Beispiel (Mandant: Robin Kinzel):
 Text: "Sehr geehrter Herr Dr. Kinzel, Ihre Nachbarin Frau Erika Mustermann (geb. 05.05.1960), Hauptstr. 3, 12345 Musterstadt, Tel. 0171 2345678, hat am 01.02.2024 beim Amtsgericht Limburg (Az. 2 C 123/24) Klage erhoben. Gez. E. Mustermann"
-Antwort: {"funde":[{"text":"Kinzel","kategorie":"name","bezug":"Mandant"},{"text":"Erika Mustermann","kategorie":"name","bezug":"Erika Mustermann"},{"text":"05.05.1960","kategorie":"geburtsdatum","bezug":"Erika Mustermann"},{"text":"Hauptstr. 3","kategorie":"adresse","bezug":"Erika Mustermann"},{"text":"12345 Musterstadt","kategorie":"adresse","bezug":"Erika Mustermann"},{"text":"0171 2345678","kategorie":"telefon","bezug":"Erika Mustermann"},{"text":"E. Mustermann","kategorie":"name","bezug":"Erika Mustermann"}]}
+Antwort: {"funde":[{"text":"Kinzel","kategorie":"name","bezug":"Mandant","unsicher":false,"hinweis":""},{"text":"Erika Mustermann","kategorie":"name","bezug":"Erika Mustermann","unsicher":false,"hinweis":""},{"text":"05.05.1960","kategorie":"geburtsdatum","bezug":"Erika Mustermann","unsicher":false,"hinweis":""},{"text":"Hauptstr. 3","kategorie":"adresse","bezug":"Erika Mustermann","unsicher":false,"hinweis":""},{"text":"12345 Musterstadt","kategorie":"adresse","bezug":"Erika Mustermann","unsicher":false,"hinweis":""},{"text":"0171 2345678","kategorie":"telefon","bezug":"Erika Mustermann","unsicher":false,"hinweis":""},{"text":"E. Mustermann","kategorie":"name","bezug":"Erika Mustermann","unsicher":false,"hinweis":""}]}
+Wäre im Text zusätzlich "Rechtsanwalt Dr. Hans Meier" als Vertreter genannt: {"text":"Hans Meier","kategorie":"name","bezug":"Hans Meier","unsicher":true,"hinweis":"Rechtsanwalt, nur dienstlich genannt"}
 
 Antworte ausschließlich mit JSON im Format {"funde": [...]}. Wenn nichts zu finden ist: {"funde": []}."""
 
@@ -104,6 +109,8 @@ class Finding:
     text: str
     kategorie: str
     bezug: str
+    unsicher: bool = False
+    hinweis: str = ""
 
 
 def _chunks(text: str, limit: int = MAX_CHARS) -> list[str]:
@@ -174,8 +181,12 @@ class AIDetector:
         text = " ".join(str(item.get("text", "")).split())
         kat = str(item.get("kategorie", "")).strip().lower()
         bezug = " ".join(str(item.get("bezug", "")).split())
+        unsicher = item.get("unsicher", False)
+        unsicher = unsicher if isinstance(unsicher, bool) else str(unsicher).lower() in ("true", "ja", "1")
+        hinweis = " ".join(str(item.get("hinweis", "") or "").split())[:120]
         if kat not in AI_CATEGORIES:
             kat = "sonstiges"
+            unsicher, hinweis = True, hinweis or "Kategorie unklar"
         n = norm(text)
         if len(n) < 2 or n in _REJECT:
             return None
@@ -190,7 +201,7 @@ class AIDetector:
             # Namen werden großgeschrieben; Gerichte/Firmen/Behörden sind keine Personen
             if not any(c.isupper() for c in text) or is_organisation(text):
                 return None
-        return Finding(text, kat, bezug)
+        return Finding(text, kat, bezug, unsicher, hinweis if unsicher else "")
 
 
 __all__ = ["AIDetector", "Finding", "AIClientError", "SETTINGS_CATEGORY"]

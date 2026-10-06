@@ -15,6 +15,7 @@ Rect = tuple[float, float, float, float]  # x0, y0, x1, y1
 
 # Quelle eines Fundes -> Priorität (kleiner = wichtiger, gewinnt bei Überschneidung)
 PRIO_MANUAL = 0
+PRIO_USER_TERM = 5
 PRIO_INPUT = 10
 PRIO_PATTERN = 20
 PRIO_AI = 30
@@ -23,6 +24,7 @@ PRIO_AI_SPREAD = 50
 
 SOURCE_NAMES = {
     PRIO_MANUAL: "Manuell",
+    PRIO_USER_TERM: "Manuell (überall)",
     PRIO_INPUT: "Eingabe",
     PRIO_PATTERN: "Regel",
     PRIO_AI: "KI",
@@ -98,6 +100,8 @@ class Hit:
     priority: int
     rects: list[Rect] = field(default_factory=list)
     enabled: bool = True
+    question: str = ""   # Rückfrage der KI ("unsicher: nur dienstlich genannt?")
+    group: str = ""      # gleiche Funde (Person bzw. gleicher Text) über alle Dokumente
     id: int = field(default_factory=lambda: next(_hit_ids))
 
     @property
@@ -112,6 +116,7 @@ class PageData:
     height: float
     words: list[Word] = field(default_factory=list)
     source: str = "text"  # text (eingebetteter Text) | ocr
+    unread: list[Rect] = field(default_factory=list)  # Tinte ohne erkannten Text (Handschrift, Stempel)
     _text: str | None = field(default=None, repr=False)
     _spans: list[tuple[int, int]] | None = field(default=None, repr=False)
 
@@ -242,6 +247,7 @@ class Document:
     hits: list[Hit] = field(default_factory=list)
     analyzed: bool = False
     exported_to: Path | None = None
+    note: str = ""  # z. B. "umgewandelt über LibreOffice"
 
     @property
     def name(self) -> str:
@@ -249,3 +255,22 @@ class Document:
 
     def hits_on(self, page: int) -> list[Hit]:
         return [h for h in self.hits if h.page == page]
+
+    def word_at(self, page: int, x: float, y: float) -> int | None:
+        """Index des Wortes an einer Seitenposition (oder None)."""
+        for i, w in enumerate(self.pages[page].words):
+            x0, y0, x1, y1 = w.bbox
+            if x0 - 1 <= x <= x1 + 1 and y0 - 1 <= y <= y1 + 1:
+                return i
+        return None
+
+    def words_in(self, page: int, rect: Rect) -> list[int]:
+        """Indizes der Wörter, deren Mitte in einem Rechteck liegt."""
+        rx0, ry0, rx1, ry1 = rect
+        out = []
+        for i, w in enumerate(self.pages[page].words):
+            x0, y0, x1, y1 = w.bbox
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            if rx0 <= cx <= rx1 and ry0 <= cy <= ry1:
+                out.append(i)
+        return out

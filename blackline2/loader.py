@@ -5,9 +5,14 @@ Word-Dateien folgen in einem späteren Schritt (Umwandlung nach PDF).
 
 from __future__ import annotations
 
+import html
 import io
 import multiprocessing
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -23,7 +28,8 @@ from blackline2.settings import Settings
 
 PDF_EXT = {".pdf"}
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
-SUPPORTED_EXT = PDF_EXT | IMAGE_EXT
+OFFICE_EXT = {".docx", ".doc", ".odt", ".rtf"}
+SUPPORTED_EXT = PDF_EXT | IMAGE_EXT | OFFICE_EXT
 
 ProgressFn = Callable[[int, int, str], None]
 
@@ -58,8 +64,137 @@ def _image_to_pdf(path: Path) -> pymupdf.Document:
     return doc
 
 
-def open_as_pdf(path: Path) -> pymupdf.Document:
+# ---------------------------------------------------------------- Word & Co.
+
+def _find_soffice() -> str | None:
+    cands: list[str | None] = [shutil.which("soffice"), shutil.which("libreoffice")]
+    if sys.platform == "win32":
+        for pf in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                   os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+            cands.append(str(Path(pf) / "LibreOffice" / "program" / "soffice.exe"))
+    elif sys.platform == "darwin":
+        cands.append("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+    for c in cands:
+        if c and Path(c).is_file():
+            return c
+    return None
+
+
+def _convert_with_word(path: Path, out_dir: Path) -> Path | None:
+    """Umwandlung über ein installiertes Microsoft Word (nur Windows)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import pythoncom  # type: ignore[import-not-found]
+        import win32com.client  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    pythoncom.CoInitialize()
+    word = None
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        doc = word.Documents.Open(str(path.resolve()), ReadOnly=True, AddToRecentFiles=False)
+        out = out_dir / (path.stem + ".pdf")
+        doc.SaveAs2(str(out), FileFormat=17)  # wdFormatPDF
+        doc.Close(False)
+        return out if out.is_file() else None
+    except Exception:  # noqa: BLE001 – Word nicht installiert / Datei defekt
+        return None
+    finally:
+        try:
+            if word is not None:
+                word.Quit()
+        except Exception:  # noqa: BLE001
+            pass
+        pythoncom.CoUninitialize()
+
+
+def _convert_with_soffice(path: Path, out_dir: Path) -> Path | None:
+    exe = _find_soffice()
+    if not exe:
+        return None
+    profile = out_dir / "profil"
+    try:
+        subprocess.run([exe, "--headless", "--norestore", f"-env:UserInstallation={profile.resolve().as_uri()}",
+                        "--convert-to", "pdf", "--outdir", str(out_dir), str(path)],
+                       capture_output=True, timeout=300, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    out = out_dir / (path.stem + ".pdf")
+    return out if out.is_file() else None
+
+
+def _convert_simple(path: Path) -> bytes | None:
+    """Notlösung ohne Word/LibreOffice: Text und Tabellen aus .docx in ein schlichtes PDF setzen."""
+    if path.suffix.lower() != ".docx":
+        return None
+    try:
+        import docx  # python-docx
+    except ImportError:
+        return None
+    d = docx.Document(str(path))
+    parts: list[str] = []
+    body = d.element.body
+    for child in body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            text = "".join(t.text or "" for t in child.iter() if t.tag.endswith("}t"))
+            parts.append(f"<p>{html.escape(text) or '&nbsp;'}</p>")
+        elif tag == "tbl":
+            rows = []
+            for tr in child.iter():
+                if not tr.tag.endswith("}tr"):
+                    continue
+                cells = []
+                for tc in tr.iter():
+                    if tc.tag.endswith("}tc"):
+                        cells.append("".join(t.text or "" for t in tc.iter() if t.tag.endswith("}t")))
+                rows.append("<tr>" + "".join(f"<td>{html.escape(c)}</td>" for c in cells) + "</tr>")
+            parts.append("<table>" + "".join(rows) + "</table>")
+    for section in d.sections:
+        for hf in (section.header, section.footer):
+            try:
+                text = " ".join(p.text for p in hf.paragraphs if p.text.strip())
+            except Exception:  # noqa: BLE001
+                text = ""
+            if text:
+                parts.append(f"<p><i>{html.escape(text)}</i></p>")
+    css = "body{font-family:sans-serif;font-size:11pt;} td{border:0.5pt solid #888;padding:2pt 4pt;}"
+    story = pymupdf.Story(html="<html><body>" + "".join(parts) + "</body></html>", user_css=css)
+    buf = io.BytesIO()
+    writer = pymupdf.DocumentWriter(buf)
+    mediabox = pymupdf.paper_rect("a4")
+    where = mediabox + (56, 56, -56, -56)
+    more = True
+    while more:
+        dev = writer.begin_page(mediabox)
+        more, _ = story.place(where)
+        story.draw(dev)
+        writer.end_page()
+    writer.close()
+    return buf.getvalue()
+
+
+def office_to_pdf(path: Path) -> tuple[bytes, str]:
+    """Word/ODT/RTF -> PDF-Bytes. Liefert (pdf, verwendetes Verfahren)."""
+    with tempfile.TemporaryDirectory(prefix="blackline2_") as tmp:
+        out_dir = Path(tmp)
+        for name, fn in (("Microsoft Word", _convert_with_word), ("LibreOffice", _convert_with_soffice)):
+            out = fn(path, out_dir)
+            if out is not None:
+                return out.read_bytes(), name
+    data = _convert_simple(path)
+    if data:
+        return data, "vereinfachte Darstellung (ohne Word/LibreOffice)"
+    raise LoadError(f"{path.name} konnte nicht in PDF umgewandelt werden. Bitte Microsoft Word oder "
+                    "LibreOffice installieren oder die Datei als PDF speichern.")
+
+
+def open_as_pdf(path: Path) -> tuple[pymupdf.Document, str]:
     ext = path.suffix.lower()
+    note = ""
     try:
         if ext in PDF_EXT:
             doc = pymupdf.open(path)
@@ -67,9 +202,10 @@ def open_as_pdf(path: Path) -> pymupdf.Document:
                 raise LoadError(f"{path.name} ist passwortgeschützt.")
         elif ext in IMAGE_EXT:
             doc = _image_to_pdf(path)
-        elif ext in {".doc", ".docx"}:
-            raise LoadError("Word-Dateien werden im nächsten Ausbauschritt unterstützt. "
-                            "Bitte vorerst als PDF speichern.")
+        elif ext in OFFICE_EXT:
+            data, method = office_to_pdf(path)
+            doc = pymupdf.open("pdf", data)
+            note = f"umgewandelt über {method}"
         else:
             raise LoadError(f"Dateityp {ext} wird nicht unterstützt.")
     except LoadError:
@@ -88,7 +224,7 @@ def open_as_pdf(path: Path) -> pymupdf.Document:
     for page in doc:
         if page.rotation:
             page.remove_rotation()
-    return doc
+    return doc, note
 
 
 # ---------------------------------------------------------------- Text je Seite
@@ -133,17 +269,18 @@ def needs_ocr(page: pymupdf.Page, mode: str) -> bool:
     return bad > 0.05 * len(text)
 
 
-def _to_page(index: int, page: pymupdf.Page, raw: list[ocr.RawWord], source: str) -> PageData:
+def _to_page(index: int, page: pymupdf.Page, raw: list[ocr.RawWord], source: str,
+             unread: list | None = None) -> PageData:
     words = [Word(t, b, line) for t, b, line in raw]
     return PageData(index=index, width=page.rect.width, height=page.rect.height,
-                    words=words, source=source)
+                    words=words, source=source, unread=list(unread or []))
 
 
 def load_document(path: Path, settings: Settings, progress: ProgressFn | None = None,
                   cancel: threading.Event | None = None) -> Document:
     path = Path(path)
     with LOCK:
-        doc = open_as_pdf(path)
+        doc, note = open_as_pdf(path)
     n = doc.page_count
     tessdata = settings.tessdata_path or str(paths.find_tessdata() or "")
     opts = ocr.OcrOptions(tessdata=tessdata, languages=settings.ocr_languages,
@@ -157,11 +294,11 @@ def load_document(path: Path, settings: Settings, progress: ProgressFn | None = 
                         "deutschen Sprachdaten (deu.traineddata) wurden nicht gefunden.\n"
                         "Bitte 'python -m blackline2.setup_ki --nur-ocr' ausführen.")
 
-    results: dict[int, tuple[list[ocr.RawWord], int, str]] = {}
+    results: dict[int, tuple[list[ocr.RawWord], int, str, list]] = {}
     with LOCK:
         for i in range(n):
             if i not in ocr_pages:
-                results[i] = (native_words(doc[i]), 0, "text")
+                results[i] = (native_words(doc[i]), 0, "text", [])
 
     done = len(results)
 
@@ -183,8 +320,8 @@ def load_document(path: Path, settings: Settings, progress: ProgressFn | None = 
                     for fut in as_completed(futures):
                         if cancel is not None and cancel.is_set():
                             raise Cancelled()
-                        idx, words, rot = fut.result()
-                        results[idx] = (words, rot, "ocr")
+                        idx, words, rot, unread = fut.result()
+                        results[idx] = (words, rot, "ocr", unread)
                         done += 1
                         report(f"{path.name}: Seite {idx + 1} erkannt")
                 except BaseException:
@@ -196,18 +333,18 @@ def load_document(path: Path, settings: Settings, progress: ProgressFn | None = 
                 if cancel is not None and cancel.is_set():
                     raise Cancelled()
                 with LOCK:
-                    words, rot = ocr.ocr_page(doc[i], opts)
-                results[i] = (words, rot, "ocr")
+                    words, rot, unread = ocr.ocr_page(doc[i], opts)
+                results[i] = (words, rot, "ocr", unread)
                 done += 1
                 report(f"{path.name}: Seite {i + 1} erkannt")
 
     with LOCK:
         # gedreht eingescannte Seiten aufrichten
-        for i, (_words, rot, _src) in results.items():
+        for i, (_words, rot, _src, _unread) in results.items():
             if rot:
                 doc[i].set_rotation(rot)
                 doc[i].remove_rotation()
-        pages = [_to_page(i, doc[i], results[i][0], results[i][2]) for i in range(n)]
+        pages = [_to_page(i, doc[i], results[i][0], results[i][2], results[i][3]) for i in range(n)]
         pdf_bytes = doc.tobytes(garbage=1, deflate=True)
         doc.close()
-    return Document(path=path, pdf_bytes=pdf_bytes, pages=pages)
+    return Document(path=path, pdf_bytes=pdf_bytes, pages=pages, note=note)

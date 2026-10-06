@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pymupdf
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence, QPixmap
-from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+                               QFormLayout, QHBoxLayout, QMenu,
                                QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QSplitter, QTabWidget,
                                QToolBar, QVBoxLayout, QWidget)
 
-from blackline2 import APP_NAME, __version__, paths
+from blackline2 import APP_NAME, __version__, paths, session
 from blackline2.ai.detector import AIDetector
-from blackline2.analysis import Analyzer, AnalysisReport
+from blackline2.analysis import (Analyzer, AnalysisReport, apply_user_term, assign_groups, group_members,
+                                 merge_page_hits, set_group_enabled)
 from blackline2.export import ExportResult, export_document, output_path_for
 from blackline2.gui import ai_manager as aim
 from blackline2.gui.findings_panel import FindingsPanel
@@ -24,7 +27,7 @@ from blackline2.gui.settings_dialog import SettingsDialog
 from blackline2.gui.workers import Worker
 from blackline2.labels import PersonRegistry
 from blackline2.loader import SUPPORTED_EXT, LoadError, load_document
-from blackline2.model import PRIO_MANUAL, Document, Hit
+from blackline2.model import PRIO_MANUAL, Document, Hit, Segment
 from blackline2.mupdf_lock import LOCK
 from blackline2.settings import Settings
 
@@ -48,6 +51,8 @@ class MainWindow(QMainWindow):
         self._render_docs: dict[int, pymupdf.Document] = {}
         self._pix_cache: dict[tuple[int, int], QPixmap] = {}
         self.worker: Worker | None = None
+        self._work_started = 0.0
+        self._pending_session: dict | None = None
         self._refresh_timer = QTimer(self, singleShot=True, interval=60)
         self._refresh_timer.timeout.connect(self._refresh_all)
 
@@ -78,11 +83,29 @@ class MainWindow(QMainWindow):
         self.act_open = action("📂 Dateien öffnen", self.open_files, "Ctrl+O")
         self.act_new = action("🗑 Neuer Vorgang", self.new_case)
         tb.addSeparator()
+        menu = self.menuBar().addMenu("&Datei")
+        menu.addAction(self.act_open)
+        a_save = QAction("Vorgang sichern …", self, shortcut=QKeySequence("Ctrl+Shift+S"))
+        a_save.triggered.connect(self.save_session)
+        a_load = QAction("Vorgang laden …", self, shortcut=QKeySequence("Ctrl+L"))
+        a_load.triggered.connect(self.load_session)
+        menu.addAction(a_save)
+        menu.addAction(a_load)
+        menu.addSeparator()
+        menu.addAction(self.act_new)
+        a_quit = QAction("Beenden", self, shortcut=QKeySequence("Ctrl+Q"))
+        a_quit.triggered.connect(self.close)
+        menu.addAction(a_quit)
+        self.act_save_session = a_save
         self.act_analyze = action("▶ Analysieren", self.analyze, "F5")
         self.act_cancel = action("⏹ Abbrechen", self.cancel_work)
         tb.addSeparator()
         self.act_preview = action("👁 Vorschau Schwärzung", self._refresh_view, "Ctrl+P", checkable=True)
         self.act_manual = action("▭ Bereich manuell schwärzen", self._toggle_manual, "Ctrl+M", checkable=True)
+        self.act_unread = action("⚠ Ungelesene Bereiche", self._refresh_view, "Ctrl+U", checkable=True)
+        self.act_unread.setChecked(True)
+        self.act_unread.setToolTip("Gelb gestrichelt: Handschrift, Unterschriften, Stempel – von Texterkennung "
+                                   "und KI nicht lesbar. Bitte selbst prüfen.")
         tb.addSeparator()
         self.act_export = action("💾 Geschwärzt speichern", self.export, "Ctrl+S")
         tb.addSeparator()
@@ -130,6 +153,8 @@ class MainWindow(QMainWindow):
         self.view = PageView()
         self.view.hit_toggled.connect(self._toggle_hit)
         self.view.rect_drawn.connect(self._manual_rect)
+        self.view.unread_clicked.connect(self._unread_clicked)
+        self.view.context_requested.connect(self._context_menu)
         cv.addWidget(self.view, 1)
 
         # Rechts: Angaben + Funde
@@ -141,6 +166,9 @@ class MainWindow(QMainWindow):
         self.findings.hits_changed.connect(self._schedule_refresh)
         self.findings.label_renamed.connect(self._rename_label)
         self.findings.hit_removed.connect(self._remove_hit)
+        self.findings.group_toggled.connect(self._group_toggled)
+        self.findings.question_decided.connect(self._question_decided)
+        self.findings.next_unread.connect(self._next_unread)
         self.tabs.addTab(self.inputs, "1. Angaben")
         self.tabs.addTab(self.findings, "2. Funde prüfen")
 
@@ -262,17 +290,33 @@ class MainWindow(QMainWindow):
 
     def _loaded(self, result) -> None:
         loaded, errors = result
+        restored = dropped = 0
         for d in loaded:
+            if self._pending_session is not None:
+                ok, bad = session.apply_session_hits(self._pending_session, d)
+                restored += ok
+                dropped += bad
             self.docs.append(d)
             item = QListWidgetItem()
             self.doc_list.addItem(item)
+        self._pending_session = None
         self._update_doc_list()
         if loaded:
             self.doc_list.setCurrentRow(len(self.docs) - len(loaded))
             ocr_pages = sum(1 for d in loaded for p in d.pages if p.source == "ocr")
+            unread = sum(len(p.unread) for d in loaded for p in d.pages)
             total = sum(len(d.pages) for d in loaded)
-            self.status_msg.setText(f"{len(loaded)} Dokument(e) geladen, {total} Seiten "
-                                    f"({ocr_pages} per Texterkennung gelesen).")
+            msg = (f"{len(loaded)} Dokument(e) geladen, {total} Seiten "
+                   f"({ocr_pages} per Texterkennung gelesen).")
+            if unread:
+                msg += f" ⚠ {unread} ungelesene Bereiche (Handschrift/Stempel?) – bitte ansehen."
+            notes = [f"{d.name}: {d.note}" for d in loaded if d.note]
+            if notes:
+                msg += "  " + "; ".join(notes)
+            if restored or dropped:
+                msg += f"  Vorgang wiederhergestellt: {restored} Funde" + (
+                    f", {dropped} nicht mehr zuzuordnen" if dropped else "") + "."
+            self.status_msg.setText(msg)
         if errors:
             QMessageBox.warning(self, "Nicht geladen", "\n\n".join(errors))
         self._update_actions()
@@ -283,7 +327,7 @@ class MainWindow(QMainWindow):
             state = ("✔ gespeichert" if d.exported_to else
                      f"{sum(h.enabled for h in d.hits)} Funde" if d.analyzed else "nicht analysiert")
             item.setText(f"{d.name}\n   {len(d.pages)} S. · {state}")
-            item.setToolTip(str(d.path))
+            item.setToolTip(str(d.path) + (f"\n{d.note}" if d.note else ""))
 
     def _select_doc(self, row: int) -> None:
         self.current = self.docs[row] if 0 <= row < len(self.docs) else None
@@ -376,7 +420,8 @@ class MainWindow(QMainWindow):
             f"{'Texterkennung' if p.source == 'ocr' else 'digitaler Text'} · {len(p.words)} Wörter · "
             f"{sum(h.enabled for h in hits)} Schwärzungen auf dieser Seite")
         pix = self._render(d, self.page_no)
-        self.view.show_page(pix, p.width, p.height, hits, self.act_preview.isChecked(), self.highlight_id)
+        self.view.show_page(pix, p.width, p.height, hits, self.act_preview.isChecked(), self.highlight_id,
+                            p.unread if self.act_unread.isChecked() else None)
 
     def _schedule_refresh(self) -> None:
         self._refresh_timer.start()
@@ -384,9 +429,12 @@ class MainWindow(QMainWindow):
     def _refresh_all(self) -> None:
         self._refresh_view()
         if self.current:
-            self.findings.set_hits(self.current.hits, self.current.analyzed)
+            self.findings.set_hits(self.current.hits, self.current.analyzed, self.docs)
+            pages = [p.index for p in self.current.pages if p.unread]
+            self.findings.set_unread_info(pages, sum(len(self.current.pages[i].unread) for i in pages))
         else:
-            self.findings.set_hits([], False)
+            self.findings.set_hits([], False, self.docs)
+            self.findings.set_unread_info([], 0)
         self._update_doc_list()
 
     def _show_hit(self, hit_id: int) -> None:
@@ -400,30 +448,202 @@ class MainWindow(QMainWindow):
         self._refresh_view()
         self.view.center_on_hit(hit)
 
-    def _toggle_hit(self, hit_id: int) -> None:
-        if not self.current:
+    def _find_hit(self, hit_id: int) -> Hit | None:
+        for d in self.docs:
+            for h in d.hits:
+                if h.id == hit_id:
+                    return h
+        return None
+
+    def _toggle_hit(self, hit_id: int, everywhere: bool = True) -> None:
+        hit = self._find_hit(hit_id)
+        if hit is None:
             return
-        for h in self.current.hits:
-            if h.id == hit_id:
-                h.enabled = not h.enabled
+        new_state = not hit.enabled
+        if everywhere and hit.group:
+            n = set_group_enabled(self.docs, hit.group, new_state)
+            self.status_msg.setText(f"„{hit.text}“ ({hit.label}): {n} Stelle(n) in allen Dokumenten "
+                                    f"{'geschwärzt' if new_state else 'ausgenommen'}. "
+                                    f"Strg+Klick ändert nur eine einzelne Stelle.")
+        else:
+            hit.enabled = new_state
         self._refresh_all()
+
+    def _group_toggled(self, group: str, enabled: bool) -> None:
+        n = set_group_enabled(self.docs, group, enabled)
+        self.status_msg.setText(f"{n} Stelle(n) {'geschwärzt' if enabled else 'ausgenommen'}.")
+        self._refresh_all()
+
+    def _question_decided(self, group: str, redact: bool) -> None:
+        members = group_members(self.docs, group)
+        for _d, h in members:
+            h.enabled = redact
+            h.question = ""
+        self.status_msg.setText(f"Rückfrage beantwortet: {len(members)} Stelle(n) "
+                                f"{'werden geschwärzt' if redact else 'bleiben lesbar'}.")
+        self._refresh_all()
+
+    # ------------------------------------------------------------ Rechtsklick / nachträgliche Begriffe
+    def _context_menu(self, x: float, y: float, hit_id: int, global_pos) -> None:
+        d = self.current
+        if d is None:
+            return
+        menu = QMenu(self)
+        hit = self._find_hit(hit_id) if hit_id >= 0 else None
+        word_idx = d.word_at(self.page_no, x, y)
+        word = d.pages[self.page_no].words[word_idx].text if word_idx is not None else ""
+        if hit is not None:
+            verb = "nicht " if hit.enabled else "doch "
+            if hit.group:
+                a = menu.addAction(f"„{hit.text}“ überall {verb}schwärzen")
+                a.triggered.connect(lambda: self._toggle_hit(hit.id, True))
+            a = menu.addAction(f"Nur diese Stelle {verb}schwärzen")
+            a.triggered.connect(lambda: self._toggle_hit(hit.id, False))
+            a = menu.addAction(f"Kürzel „{hit.label}“ überall ändern …")
+            a.triggered.connect(lambda: self._ask_rename(hit.label))
+            if hit.priority == PRIO_MANUAL:
+                a = menu.addAction("Manuelle Schwärzung löschen")
+                a.triggered.connect(lambda: self._remove_hit(hit.id))
+            menu.addSeparator()
+        if word:
+            clean = word.strip(".,;:!?()[]\"'„“")
+            a = menu.addAction(f"„{clean}“ überall schwärzen (alle Dokumente) …")
+            a.triggered.connect(lambda: self._add_term(clean, everywhere=True))
+            a = menu.addAction(f"„{clean}“ nur hier schwärzen …")
+            a.triggered.connect(lambda: self._add_term(clean, everywhere=False, page=self.page_no,
+                                                       segments=[Segment(word_idx)]))
+        if menu.isEmpty():
+            return
+        menu.exec(global_pos)
+
+    def _ask_label(self, title: str, text: str, default: str = "") -> str | None:
+        labels = sorted({h.label for dd in self.docs for h in dd.hits})
+        for std in ("Mandant", "Gegner", "Adresse Mandant", "Adresse Gegner", "geschwärzt"):
+            if std not in labels:
+                labels.append(std)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        form = QFormLayout(dlg)
+        info = QLabel(text)
+        info.setWordWrap(True)
+        form.addRow(info)
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(labels)
+        combo.setCurrentText(default or ("geschwärzt" if "geschwärzt" in labels else labels[0]))
+        form.addRow("Kürzel:", combo)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        form.addRow(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return combo.currentText().strip() or None
+
+    def _add_term(self, term: str, everywhere: bool, page: int | None = None,
+                  segments: list[Segment] | None = None) -> None:
+        d = self.current
+        if d is None or not term:
+            return
+        label = self._ask_label("Nachträglich schwärzen",
+                                f"„{term}“ {'in allen geladenen Dokumenten' if everywhere else 'nur an dieser Stelle'}"
+                                " schwärzen. Welches Kürzel soll darüberstehen?")
+        if not label:
+            return
+        if everywhere:
+            n = apply_user_term(self.docs, term, label, self.settings.fuzzy_matching)
+            self.status_msg.setText(f"„{term}“ → „{label}“: {n} Stelle(n) in allen Dokumenten geschwärzt.")
+        else:
+            p = d.pages[page if page is not None else self.page_no]
+            segs = p.trim_segments(segments or [])
+            hit = Hit(p.index, segs, p.segment_text(segs), label, "benutzer", PRIO_MANUAL)
+            others = [h for h in d.hits if h.page != p.index]
+            d.hits = others + merge_page_hits(p, d.hits_on(p.index) + [hit])
+            assign_groups(self.docs)
+        d.analyzed = True
+        self._refresh_all()
+        self._update_actions()
+
+    def _ask_rename(self, label: str) -> None:
+        new, ok = QInputDialog.getText(self, "Kürzel ändern", f"Neues Kürzel für „{label}“:", text=label)
+        new = new.strip()
+        if ok and new and new != label:
+            self._rename_label(label, new)
+
+    def _unread_clicked(self, index: int) -> None:
+        d = self.current
+        if d is None:
+            return
+        p = d.pages[self.page_no]
+        if not 0 <= index < len(p.unread):
+            return
+        rect = p.unread[index]
+        label = self._ask_label("Ungelesenen Bereich schwärzen",
+                                "Dieser Bereich enthält Tinte, die weder Texterkennung noch KI lesen konnten "
+                                "(Handschrift, Unterschrift, Stempel?). Schwärzen?")
+        if not label:
+            return
+        d.hits.append(Hit(page=self.page_no, segments=[], text="(ungelesener Bereich)", label=label,
+                          category="manuell", priority=PRIO_MANUAL, rects=[rect]))
+        p.unread.pop(index)
+        d.analyzed = True
+        self._refresh_all()
+        self._update_actions()
+
+    def _next_unread(self) -> None:
+        d = self.current
+        if d is None:
+            return
+        order = list(range(self.page_no, len(d.pages))) + list(range(0, self.page_no))
+        # auf der aktuellen Seite zuerst, sonst die nächste Seite mit ungelesenen Bereichen
+        for i in order:
+            if d.pages[i].unread:
+                self.page_no = i
+                self.act_unread.setChecked(True)
+                self._refresh_view()
+                self.view.center_on_rect(d.pages[i].unread[0])
+                return
+        self.status_msg.setText("Keine ungelesenen Bereiche mehr in diesem Dokument.")
 
     def _toggle_manual(self) -> None:
         self.view.set_manual_mode(self.act_manual.isChecked())
 
     def _manual_rect(self, rect: QRectF) -> None:
-        if not self.current:
-            return
-        labels = sorted({h.label for d in self.docs for h in d.hits} | {"geschwärzt"})
-        label, ok = QInputDialog.getItem(self, "Manuell schwärzen", "Kürzel für diesen Bereich:",
-                                         labels, labels.index("geschwärzt"), True)
-        if not ok or not label.strip():
+        d = self.current
+        if d is None:
             return
         r = (rect.left(), rect.top(), rect.right(), rect.bottom())
-        self.current.hits.append(Hit(page=self.page_no, segments=[], text="(manueller Bereich)",
-                                     label=label.strip(), category="manuell", priority=PRIO_MANUAL,
-                                     rects=[r]))
+        p = d.pages[self.page_no]
+        word_ids = d.words_in(self.page_no, r)
+        phrase = " ".join(p.words[i].text for i in word_ids).strip(".,;:!?()[]\"'„“") if word_ids else ""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Manuell schwärzen")
+        form = QFormLayout(dlg)
+        labels = sorted({h.label for dd in self.docs for h in dd.hits} | {"geschwärzt"})
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(labels)
+        combo.setCurrentText("geschwärzt")
+        form.addRow("Kürzel:", combo)
+        every = QCheckBox(f"Text „{phrase[:60]}“ auch überall sonst schwärzen (alle Dokumente)")
+        every.setChecked(bool(phrase) and len(phrase) >= 3)
+        every.setEnabled(bool(phrase))
+        form.addRow(every)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        form.addRow(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        label = combo.currentText().strip() or "geschwärzt"
+        d.hits.append(Hit(page=self.page_no, segments=[], text=phrase or "(manueller Bereich)", label=label,
+                          category="manuell", priority=PRIO_MANUAL, rects=[r]))
+        if every.isChecked() and phrase:
+            n = apply_user_term(self.docs, phrase, label, self.settings.fuzzy_matching)
+            self.status_msg.setText(f"„{phrase}“ → „{label}“: {n} weitere Stelle(n) geschwärzt.")
+        d.analyzed = True
         self._refresh_all()
+        self._update_actions()
 
     def _remove_hit(self, hit_id: int) -> None:
         if self.current:
@@ -499,6 +719,9 @@ class MainWindow(QMainWindow):
         msg = f"Analyse fertig: {report.hit_count} Fundstellen."
         if not report.ai_used:
             msg += " (ohne KI)"
+        questions = {h.group for d in self.docs for h in d.hits if h.question}
+        if questions:
+            msg += f"  ❓ {len(questions)} Rückfrage(n) der KI – bitte im Reiter „Funde prüfen“ beantworten."
         self.status_msg.setText(msg)
         if report.ai_errors:
             QMessageBox.warning(self, "KI-Fehler",
@@ -574,6 +797,7 @@ class MainWindow(QMainWindow):
     def _run(self, fn, *args, on_done, label: str) -> None:
         w = Worker(fn, *args, parent=self)
         self.worker = w
+        self._work_started = time.monotonic()
         w.progress.connect(self._progress)
         w.succeeded.connect(on_done)
         w.failed.connect(lambda msg, det: self._failed(label, msg, det))
@@ -589,6 +813,10 @@ class MainWindow(QMainWindow):
         if total > 0:
             self.progress.setRange(0, total)
             self.progress.setValue(done)
+            elapsed = time.monotonic() - self._work_started
+            if done >= 2 and elapsed > 5 and done < total:
+                rest = elapsed / done * (total - done)
+                msg += f"   (noch ca. {_fmt_duration(rest)})"
         else:
             self.progress.setRange(0, 0)
         self.status_msg.setText(msg)
@@ -619,6 +847,54 @@ class MainWindow(QMainWindow):
         self.act_open.setEnabled(not busy)
         self.act_new.setEnabled(not busy)
 
+    # ================================================================ Vorgang sichern / laden
+    def save_session(self) -> None:
+        if not self.docs:
+            QMessageBox.information(self, APP_NAME, "Es ist kein Dokument geladen.")
+            return
+        default = str(self.docs[0].path.with_suffix(session.SUFFIX))
+        path, _ = QFileDialog.getSaveFileName(self, "Vorgang sichern", default,
+                                              f"Blackline-2-Vorgang (*{session.SUFFIX})")
+        if not path:
+            return
+        if not path.endswith(session.SUFFIX):
+            path += session.SUFFIX
+        try:
+            session.save_session(Path(path), self.docs, self.inputs.inputs(), self.registry)
+        except OSError as exc:
+            QMessageBox.critical(self, APP_NAME, f"Speichern fehlgeschlagen: {exc}")
+            return
+        self.status_msg.setText(f"Vorgang gesichert: {path}  (enthält Mandantendaten – vertraulich!)")
+
+    def load_session(self) -> None:
+        if not self._can_start():
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Vorgang laden", "",
+                                              f"Blackline-2-Vorgang (*{session.SUFFIX})")
+        if not path:
+            return
+        try:
+            data = session.load_session(Path(path))
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, APP_NAME, f"Vorgang konnte nicht geladen werden: {exc}")
+            return
+        files = session.session_paths(data)
+        missing = [f for f in files if not f.exists()]
+        if missing:
+            QMessageBox.warning(self, APP_NAME, "Diese Dateien wurden nicht gefunden und werden übersprungen:\n"
+                                + "\n".join(str(m) for m in missing))
+        self.inputs.set_inputs(session.session_inputs(data))
+        self.registry = PersonRegistry()
+        session.restore_registry(data, self.registry)
+        self._pending_session = data
+        known = {d.path.resolve() for d in self.docs}
+        todo = [f for f in files if f.exists() and f.resolve() not in known]
+        if todo:
+            self.load_files(todo)
+        else:
+            self._pending_session = None
+            self.status_msg.setText("Alle Dokumente des Vorgangs sind bereits geladen.")
+
     # ================================================================ Sonstiges
     def open_settings(self) -> None:
         dlg = SettingsDialog(self.settings, self)
@@ -645,6 +921,15 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{max(seconds, 1)} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600} h {seconds % 3600 // 60} min"
+
+
 HELP_TEXT = """So funktioniert Blackline 2:
 
 1. Dokumente laden (PDF oder Bild) – per „Dateien öffnen“ oder Ziehen ins Fenster.
@@ -657,9 +942,12 @@ HELP_TEXT = """So funktioniert Blackline 2:
    persönliche Daten. Zusätzlich greifen feste Regeln für E-Mail, Telefon,
    IBAN, Versicherungs-/Rentennummern und Geburtsdaten.
 
-4. Funde prüfen: Farbige Markierungen anklicken schaltet sie aus/ein.
-   „Vorschau Schwärzung“ zeigt das Ergebnis. Fehlende Stellen mit
-   „Bereich manuell schwärzen“ aufziehen.
+4. Funde prüfen: Klick auf eine Markierung schaltet sie überall (alle
+   Dokumente) aus/ein, Strg+Klick nur an dieser Stelle. Rückfragen der KI
+   oben im Reiter beantworten – die Antwort gilt für alle gleichen Stellen.
+   Rechtsklick auf ein Wort = nachträglich überall schwärzen.
+   Gelb gestrichelt = ungelesene Bereiche (Handschrift, Stempel): ansehen
+   und bei Bedarf anklicken. „Vorschau Schwärzung“ zeigt das Ergebnis.
 
 5. „Geschwärzt speichern“: Die Stellen werden weiß überdeckt und mit dem
    Kürzel in schwarzer Schrift beschriftet. Das Original bleibt unverändert.

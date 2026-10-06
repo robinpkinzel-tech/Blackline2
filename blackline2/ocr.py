@@ -36,6 +36,7 @@ class OcrOptions:
     deskew: bool = True
     orientation: bool = True
     recover: bool = True  # übersprungene Textbereiche erneut lesen
+    unread: bool = True   # ungelesene Bereiche (Handschrift, Stempel) melden
 
 
 # ---------------------------------------------------------------- Bildvorverarbeitung
@@ -148,7 +149,7 @@ def _bands(profile: np.ndarray, min_val: int, max_gap: int) -> list[tuple[int, i
 
 
 def recover_missed_text(img: Image.Image, words, dpi: int, opts: OcrOptions,
-                        max_regions: int = 40) -> list[tuple[str, tuple[float, float, float, float], int]]:
+                        max_regions: int = 40) -> list[list[tuple[str, tuple[float, float, float, float], int]]]:
     """Zweiter Durchgang für Textbereiche, die die OCR übersprungen hat.
 
     Tesseract lässt bei ungewöhnlichem Layout (Stempel, Tabellen, gemischte
@@ -189,11 +190,140 @@ def recover_missed_text(img: Image.Image, words, dpi: int, opts: OcrOptions,
             crop.paste(img.crop(box), (m, m))
             ox, oy = box[0] - m, box[1] - m
             lines: dict[int, int] = {}
+            region = []
             for text, (x0, y0, x1, y1), line in _ocr_image(crop, dpi, opts):
                 lid = lines.setdefault(line, next_line + len(lines))
-                found.append((text, (x0 + ox, y0 + oy, x1 + ox, y1 + oy), lid))
+                region.append((text, (x0 + ox, y0 + oy, x1 + ox, y1 + oy), lid))
             next_line += len(lines)
+            if region:
+                found.append(region)
     return found
+
+
+_PLAUSIBLE_WORD = re.compile(
+    r"^[(\"„]?(?:[A-Za-zÄÖÜäöüß][a-zäöüß]{2,}(?:-[A-Za-zÄÖÜäöüß][a-zäöüß]+)?|[A-ZÄÖÜ]{3,}|\d{2,}(?:[./\-]\d+)*)[.,;:!?)\"“]?$"
+)
+
+
+_VOWELS = set("aeiouyäöüAEIOUYÄÖÜ")
+
+
+def plausible_word(text: str) -> bool:
+    """Sieht ein OCR-Ergebnis nach Text aus (nicht nach falsch gelesener Handschrift)?"""
+    if not _PLAUSIBLE_WORD.match(text):
+        return False
+    core = text.strip(".,;:!?()\"„“")
+    if core.isalpha():
+        if len(core) >= 4 and not any(c in _VOWELS for c in core):
+            return False                      # "VVVYNN"
+        if len(core) >= 5 and len(set(core.lower())) < 3:
+            return False                      # "AAAAAA", "ININII"
+    return True
+
+
+def plausible_geometry(word) -> bool:
+    """Passt die Kastenbreite zur Zeichenzahl? Handschrift/Linien ergeben z. B. 'SONNY' über 5 cm."""
+    text, (x0, y0, x1, y1), _l = word
+    n = max(len(text), 1)
+    h = max(y1 - y0, 1.0)
+    cw = (x1 - x0) / n
+    return 0.15 * h <= cw <= 1.3 * h
+
+
+def plausible_region(words, ref_height: float | None = None) -> bool:
+    """Gilt eine nachgelesene Region als echter Text?
+
+    Mindestens die Hälfte der Wörter muss plausibel sein, und die Schrift darf
+    nicht viel größer sein als der übrige Drucktext (Unterschriften sind groß).
+    """
+    if not words:
+        return False
+    good = sum(1 for w in words if plausible_word(w[0]) and plausible_geometry(w))
+    if good < 0.5 * len(words):
+        return False
+    if ref_height:
+        heights = sorted(w[1][3] - w[1][1] for w in words)
+        if heights[len(heights) // 2] > 1.6 * ref_height:
+            return False
+    return True
+
+
+def median_word_height(words) -> float | None:
+    hs = sorted(w[1][3] - w[1][1] for w in words if plausible_geometry(w) and plausible_word(w[0]))
+    return hs[len(hs) // 2] if len(hs) >= 3 else None
+
+
+def _erase_lines(mask: np.ndarray, min_len: int) -> np.ndarray:
+    """Lange gerade Linien (Tabellen, Rahmen, Unterstreichungen) aus der Tintenmaske entfernen."""
+    out = mask.copy()
+    for axis in (0, 1):
+        m = out if axis == 0 else out.T
+        for row in m:
+            if row.sum() < min_len:
+                continue
+            padded = np.concatenate(([False], row, [False]))
+            edges = np.flatnonzero(padded[1:] != padded[:-1])
+            for start, end in zip(edges[::2], edges[1::2], strict=False):
+                if end - start >= min_len:
+                    row[start:end] = False
+    return out
+
+
+def find_unread_regions(img: Image.Image, words, dpi: int, max_regions: int = 60) -> list[tuple[int, int, int, int]]:
+    """Bereiche mit Tinte, die keinem erkannten Wort gehören: Handschrift, Unterschriften, Stempel.
+
+    Diese Stellen kann weder die Texterkennung noch die KI lesen – sie werden
+    dem Nutzer als "ungelesen, bitte prüfen" gezeigt. Liefert Pixel-Rechtecke.
+    """
+    f = 4
+    w, h = img.size
+    small = np.asarray(img.resize((max(1, w // f), max(1, h // f)), Image.BOX), dtype=np.uint8)
+    ink = small < 150
+    covered = np.zeros_like(ink)
+    pad = max(2, int(dpi / 120))
+    for _t, (x0, y0, x1, y1), _l in words:
+        covered[max(0, int(y0 / f) - pad):int(y1 / f) + pad + 1, max(0, int(x0 / f) - pad):int(x1 / f) + pad + 1] = True
+    rest = _erase_lines(ink & ~covered, max(3, int(dpi * 0.6 / f)))
+    if rest.sum() < 20:
+        return []
+    # Schriftzüge zu Flächen verbinden (Handschrift besteht aus vielen dünnen Strichen)
+    grow = max(1, int(dpi / 25 / f))
+    blob = np.asarray(Image.fromarray((rest * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(2 * grow + 1))) > 0
+    boxes: list[tuple[int, int, int, int]] = []
+    for r0, r1 in _bands(blob.sum(axis=1), 1, 0):
+        cols = blob[r0:r1].sum(axis=0)
+        for c0, c1 in _bands(cols, 1, 0):
+            sub = rest[r0:r1, c0:c1]
+            rows = np.flatnonzero(sub.sum(axis=1))
+            cs = np.flatnonzero(sub.sum(axis=0))
+            if rows.size == 0 or cs.size == 0:
+                continue
+            # auf die eigentliche Tinte zuschneiden
+            y0, y1 = r0 + int(rows[0]), r0 + int(rows[-1]) + 1
+            x0, x1 = c0 + int(cs[0]), c0 + int(cs[-1]) + 1
+            bw, bh = (x1 - x0) * f, (y1 - y0) * f
+            count = int(rest[y0:y1, x0:x1].sum())
+            if bw < dpi * 0.12 or bh < dpi * 0.06:          # kleiner als ~3 x 1,5 mm: Fleck
+                continue
+            if count * f * f < (dpi / 18) ** 2:               # zu wenig Tinte
+                continue
+            if (bh < dpi * 0.05 and bw > 6 * bh) or (bw < dpi * 0.05 and bh > 6 * bw):
+                continue                                      # Linienrest
+            density = count / max((x1 - x0) * (y1 - y0), 1)
+            area = bw * bh / (w * h)
+            if density > 0.8 or area > 0.2 or (area > 0.04 and density > 0.55):
+                continue                                      # Foto / Logo / Vollfläche
+            if density < 0.03:
+                continue                                      # fast leer (Rahmenreste)
+            edge = int(dpi * 0.06 / f)
+            touches = x0 <= edge or y0 <= edge or x1 >= small.shape[1] - edge or y1 >= small.shape[0] - edge
+            if touches and (bw > 0.5 * w or bh > 0.5 * h):   # schwarzer Scanrand
+                continue
+            m = int(dpi / 30)
+            boxes.append((max(0, x0 * f - m), max(0, y0 * f - m), min(w, x1 * f + m), min(h, y1 * f + m)))
+            if len(boxes) >= max_regions:
+                return boxes
+    return boxes
 
 
 def text_quality(words) -> int:
@@ -236,8 +366,8 @@ def _make_inverse_mapper(angle: float, w: int, h: int):
     return f
 
 
-def ocr_page(page: pymupdf.Page, opts: OcrOptions) -> tuple[list[RawWord], int]:
-    """OCR einer Seite. Liefert (Wörter in Seitenkoordinaten, empfohlene Drehung).
+def ocr_page(page: pymupdf.Page, opts: OcrOptions) -> tuple[list[RawWord], int, list[tuple[float, float, float, float]]]:
+    """OCR einer Seite. Liefert (Wörter, empfohlene Drehung, ungelesene Bereiche) in Seitenkoordinaten.
 
     Ist die empfohlene Drehung != 0, beziehen sich die Wörter bereits auf die
     gedrehte Seite (Breite/Höhe ggf. vertauscht). Der Aufrufer muss die Seite
@@ -264,19 +394,28 @@ def ocr_page(page: pymupdf.Page, opts: OcrOptions) -> tuple[list[RawWord], int]:
             work, mapper = prepare(img)
             words_px = _ocr_image(work, dpi, opts)
 
+    cover = [w for w in words_px if plausible_geometry(w)]
     if opts.recover:
-        words_px = words_px + recover_missed_text(work, words_px, dpi, opts)
+        ref = median_word_height(words_px)
+        for region in recover_missed_text(work, words_px, dpi, opts):
+            words_px = words_px + region
+            if plausible_region(region, ref):  # Buchstabensalat aus Handschrift zählt nicht als "gelesen"
+                cover += region
+    unread_px = find_unread_regions(work, cover, dpi) if opts.unread else []
 
     scale = 72.0 / dpi
-    out: list[RawWord] = []
-    for text, (x0, y0, x1, y1), line in words_px:
+
+    def to_page(x0: float, y0: float, x1: float, y1: float) -> tuple[float, float, float, float]:
         if mapper:
             pts = [mapper(x, y) for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1))]
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
             x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
-        out.append((text, (x0 * scale, y0 * scale, x1 * scale, y1 * scale), line))
-    return out, rotation
+        return (x0 * scale, y0 * scale, x1 * scale, y1 * scale)
+
+    out: list[RawWord] = [(text, to_page(*box), line) for text, box, line in words_px]
+    unread = [to_page(*box) for box in unread_px]
+    return out, rotation, unread
 
 
 # ---------------------------------------------------------------- Worker (Prozesspool)
@@ -289,7 +428,7 @@ def worker_init(pdf_bytes: bytes) -> None:
     _worker_doc = pymupdf.open("pdf", pdf_bytes)
 
 
-def worker_ocr(page_index: int, opts: OcrOptions) -> tuple[int, list[RawWord], int]:
+def worker_ocr(page_index: int, opts: OcrOptions):
     assert _worker_doc is not None
-    words, rot = ocr_page(_worker_doc[page_index], opts)
-    return page_index, words, rot
+    words, rot, unread = ocr_page(_worker_doc[page_index], opts)
+    return page_index, words, rot, unread
