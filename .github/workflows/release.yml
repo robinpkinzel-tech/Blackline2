@@ -10,6 +10,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Versionsnummer für eine Veröffentlichung, z. B. v0.2.0 (leer = nur bauen, Dateien als Artefakte)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -82,7 +87,7 @@ jobs:
   release:
     name: Veröffentlichen
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.version != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -109,6 +114,9 @@ jobs:
           EOF
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Blackline 2 ${{ github.event.inputs.version || github.ref_name }}
           files: dateien/*
           body_path: hinweise.md
           generate_release_notes: true
