@@ -16,6 +16,7 @@ Modus "text":
 from __future__ import annotations
 
 import math
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -210,9 +211,32 @@ def verify_text_export(doc: Document, out_path: Path) -> list[str]:
     return warnings
 
 
-def output_path_for(doc: Document, folder: Path | None, suffix: str) -> Path:
+def neutral_stem(doc: Document) -> str:
+    """Dateiname ohne Namen: geschwärzte Begriffe im Dateinamen durch Kürzel ersetzen.
+
+    "Kinzel_Klage_2024" -> "Mandant_Klage_2024"
+    """
+    stem = doc.path.stem
+    repl: dict[str, str] = {}
+    for h in doc.hits:
+        if not h.enabled or h.category == "manuell":
+            continue
+        for part in re.split(r"[\s,;]+", h.text):
+            part = part.strip(".,;:()[]\"'")
+            if len(part) >= 3 and not part.isdigit():
+                repl.setdefault(part, h.label.replace(" ", "-").replace("/", "-"))
+            elif part.isdigit() and len(part) >= 4:
+                repl.setdefault(part, h.label.replace(" ", "-").replace("/", "-"))
+    for part in sorted(repl, key=len, reverse=True):
+        stem = re.sub(re.escape(part), repl[part], stem, flags=re.IGNORECASE)
+    stem = re.sub(r'[<>:"/\\|?*]', "_", stem)
+    return stem or "Dokument"
+
+
+def output_path_for(doc: Document, folder: Path | None, suffix: str, neutral: bool = True) -> Path:
     folder = folder or doc.path.parent
-    return folder / f"{doc.path.stem}{suffix}.pdf"
+    stem = neutral_stem(doc) if neutral else doc.path.stem
+    return folder / f"{stem}{suffix}.pdf"
 
 
 def export_document(doc: Document, out_path: Path, mode: str = "bild", dpi: int = 300,

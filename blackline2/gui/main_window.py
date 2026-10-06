@@ -520,7 +520,11 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         folder_p = Path(folder)
-        targets = [(d, output_path_for(d, folder_p, self.settings.export_suffix)) for d in docs]
+        targets = [(d, output_path_for(d, folder_p, self.settings.export_suffix,
+                                       self.settings.export_neutral_filename)) for d in docs]
+        names = [t.name for _d, t in targets]
+        if len(set(names)) != len(names):  # gleiche neutrale Namen durchnummerieren
+            targets = [(d, t.with_name(f"{t.stem}_{i + 1}{t.suffix}")) for i, (d, t) in enumerate(targets)]
         existing = [t for _, t in targets if t.exists()]
         if existing and QMessageBox.question(
                 self, APP_NAME, f"{len(existing)} Datei(en) existieren bereits und werden überschrieben:\n"

@@ -1,4 +1,5 @@
 import io
+import socketserver
 import threading
 import zipfile
 from functools import partial
@@ -50,7 +51,13 @@ def test_download_and_extract(tmp_path):
         z.writestr("build/bin/llama-server", "#!/bin/sh\n")
     (src / "paket.zip").write_bytes(buf.getvalue())
     handler = partial(SimpleHTTPRequestHandler, directory=str(src))
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+
+    class Server(ThreadingHTTPServer):
+        def server_bind(self):  # ohne langsame DNS-Auflösung
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = "localhost", self.server_address[1]
+
+    httpd = Server(("127.0.0.1", 0), handler)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     try:

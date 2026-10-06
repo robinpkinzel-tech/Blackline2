@@ -58,6 +58,7 @@ class Settings:
     export_dpi: int = 300
     export_searchable: bool = False  # OCR-Textebene über das geschwärzte Bild legen
     export_suffix: str = "_geschwärzt"
+    export_neutral_filename: bool = True  # Namen auch im Dateinamen durch Kürzel ersetzen
 
     @classmethod
     def load(cls) -> "Settings":

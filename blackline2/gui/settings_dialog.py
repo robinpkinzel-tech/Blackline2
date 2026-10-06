@@ -117,6 +117,9 @@ class SettingsDialog(QDialog):
         f.addRow("", self.exp_search)
         self.exp_suffix = QLineEdit(settings.export_suffix)
         f.addRow("Dateiname-Zusatz:", self.exp_suffix)
+        self.exp_neutral = QCheckBox("Namen auch im Dateinamen durch Kürzel ersetzen")
+        self.exp_neutral.setChecked(settings.export_neutral_filename)
+        f.addRow("", self.exp_neutral)
         tabs.addTab(ex, "Speichern")
 
         lay = QVBoxLayout(self)
@@ -160,5 +163,6 @@ class SettingsDialog(QDialog):
         s.export_dpi = self.exp_dpi.value()
         s.export_searchable = self.exp_search.isChecked()
         s.export_suffix = self.exp_suffix.text() or "_geschwärzt"
+        s.export_neutral_filename = self.exp_neutral.isChecked()
         s.save()
         return before != self.ki_signature()

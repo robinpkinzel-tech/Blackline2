@@ -78,6 +78,12 @@ def open_as_pdf(path: Path) -> pymupdf.Document:
         raise LoadError(f"{path.name} konnte nicht geöffnet werden: {exc}") from exc
     if doc.page_count == 0:
         raise LoadError(f"{path.name} enthält keine Seiten.")
+    # Kommentare, Stempel und Formularfelder in den Seiteninhalt einbrennen: so werden
+    # Namen darin erkannt und geschwärzt, und versteckte Notizen fallen weg.
+    try:
+        doc.bake()
+    except Exception:  # noqa: BLE001 – ältere PyMuPDF-Version oder defekte Anmerkung
+        pass
     # Seitendrehung "einbacken": danach gilt überall dasselbe Koordinatensystem
     for page in doc:
         if page.rotation:
@@ -99,10 +105,13 @@ def _image_coverage(page: pymupdf.Page) -> float:
 def native_words(page: pymupdf.Page) -> list[ocr.RawWord]:
     out: list[ocr.RawWord] = []
     line_ids: dict[tuple[int, int], int] = {}
+    seen: set[tuple[str, int, int]] = set()
     for x0, y0, x1, y1, text, block, line, _w in page.get_text("words"):
         text = text.strip()
-        if not text:
+        key = (text, round(x0), round(y0))
+        if not text or key in seen:  # doppelt gezeichneter Text
             continue
+        seen.add(key)
         lid = line_ids.setdefault((block, line), len(line_ids))
         out.append((text, (x0, y0, x1, y1), lid))
     return out

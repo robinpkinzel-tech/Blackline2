@@ -8,6 +8,7 @@ Heuristik: Nach "Herr/Frau/Herrn" folgende großgeschriebene Wörter gelten als 
 import argparse
 import json
 import re
+import socketserver
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -63,8 +64,13 @@ def main() -> None:
             content = json.dumps({"funde": findings(page)})
             self._send(200, {"choices": [{"message": {"role": "assistant", "content": content}}]})
 
+    class Server(ThreadingHTTPServer):
+        def server_bind(self):  # ohne getfqdn(): das hängt auf manchen Rechnern ~30 s (DNS)
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = "localhost", self.server_address[1]
+
     print("fake llama-server listening", flush=True)
-    ThreadingHTTPServer((args.host, args.port), H).serve_forever()
+    Server((args.host, args.port), H).serve_forever()
 
 
 if __name__ == "__main__":

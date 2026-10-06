@@ -125,3 +125,30 @@ def test_original_is_never_overwritten(digital_pdf, tessdata):
     doc = analyze(digital_pdf, tessdata)
     with pytest.raises(ValueError):
         export_document(doc, digital_pdf)
+
+
+def test_neutral_filename(tmp_path, page_factory):
+    from blackline2.export import output_path_for
+    from blackline2.model import Document, Hit, Segment
+
+    page = page_factory("Robin Kinzel")
+    doc = Document(path=tmp_path / "Kinzel_Robin_Klage 2024.pdf", pdf_bytes=b"", pages=[page])
+    doc.hits = [Hit(0, [Segment(0), Segment(1)], "Robin Kinzel", "Mandant", "name", 10)]
+    assert output_path_for(doc, tmp_path, "_geschwärzt").name == "Mandant_Mandant_Klage 2024_geschwärzt.pdf"
+    assert output_path_for(doc, tmp_path, "_x", neutral=False).name == "Kinzel_Robin_Klage 2024_x.pdf"
+
+
+def test_annotations_are_baked_and_redacted(tmp_path, tessdata):
+    pdf = tmp_path / "kommentar.pdf"
+    d = pymupdf.open()
+    p = d.new_page()
+    p.insert_text((60, 80), "Schreiben in der Sache", fontsize=11)
+    p.add_freetext_annot((60, 100, 300, 125), "Notiz: Robin Kinzel anrufen")
+    d.save(pdf)
+    doc = analyze(pdf, tessdata)
+    assert any(h.text == "Robin Kinzel" for h in doc.hits)
+    out = tmp_path / "kommentar_out.pdf"
+    export_document(doc, out, mode="text")
+    with pymupdf.open(out) as r:
+        assert "Kinzel" not in r[0].get_text()
+        assert not list(r[0].annots())

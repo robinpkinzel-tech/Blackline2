@@ -288,7 +288,8 @@ class LocalAIServer:
             if self.health():
                 return
             time.sleep(0.5)
-        raise AIServerError("Der KI-Server ist nicht rechtzeitig bereit geworden.")
+        tail = "\n".join(list(self.log)[-15:])
+        raise AIServerError(f"Der KI-Server ist nicht rechtzeitig bereit geworden.\n{tail}")
 
     def stop(self) -> None:
         with self._lock:
