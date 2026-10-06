@@ -8,7 +8,7 @@ from pathlib import Path
 import pymupdf
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence, QPixmap
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QHBoxLayout, QMenu,
                                QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QSplitter, QTabWidget,
@@ -53,6 +53,9 @@ class MainWindow(QMainWindow):
         self.worker: Worker | None = None
         self._work_started = 0.0
         self._pending_session: dict | None = None
+        self._last_manual_label = "geschwärzt"
+        self._setup_offered = False
+        self.auto_offer_setup = True
         self._refresh_timer = QTimer(self, singleShot=True, interval=60)
         self._refresh_timer.timeout.connect(self._refresh_all)
 
@@ -92,6 +95,10 @@ class MainWindow(QMainWindow):
         menu.addAction(a_save)
         menu.addAction(a_load)
         menu.addSeparator()
+        a_setup = QAction("KI einrichten / aktualisieren …", self)
+        a_setup.triggered.connect(self.open_setup)
+        menu.addAction(a_setup)
+        menu.addSeparator()
         menu.addAction(self.act_new)
         a_quit = QAction("Beenden", self, shortcut=QKeySequence("Ctrl+Q"))
         a_quit.triggered.connect(self.close)
@@ -101,6 +108,8 @@ class MainWindow(QMainWindow):
         self.act_cancel = action("⏹ Abbrechen", self.cancel_work)
         tb.addSeparator()
         self.act_preview = action("👁 Vorschau Schwärzung", self._refresh_view, "Ctrl+P", checkable=True)
+        self.act_preview.setToolTip("Zeigt das Ergebnis. In der Vorschau: Bereich mit der Maus aufziehen, "
+                                    "Kürzel tippen, Enter – fertig.")
         self.act_manual = action("▭ Bereich manuell schwärzen", self._toggle_manual, "Ctrl+M", checkable=True)
         self.act_unread = action("⚠ Ungelesene Bereiche", self._refresh_view, "Ctrl+U", checkable=True)
         self.act_unread.setChecked(True)
@@ -153,6 +162,7 @@ class MainWindow(QMainWindow):
         self.view = PageView()
         self.view.hit_toggled.connect(self._toggle_hit)
         self.view.rect_drawn.connect(self._manual_rect)
+        self.view.rect_labeled.connect(self._rect_labeled)
         self.view.unread_clicked.connect(self._unread_clicked)
         self.view.context_requested.connect(self._context_menu)
         cv.addWidget(self.view, 1)
@@ -203,10 +213,32 @@ class MainWindow(QMainWindow):
 
     def _ai_state(self, state: str, message: str) -> None:
         color = STATE_COLORS.get(state, "#757575")
+        if state == aim.MISSING and self.auto_offer_setup and not self._setup_offered:
+            self._setup_offered = True
+            QTimer.singleShot(600, self._offer_setup)
         self.ai_label.setText(f"● {message}")
         self.ai_label.setStyleSheet(f"color: {color}; font-weight: bold;")
         self.ai_label.setToolTip("Die lokale KI läuft nur, solange Blackline 2 geöffnet ist.\n"
                                  "Klicken für Details.")
+
+    def _offer_setup(self) -> None:
+        if QMessageBox.question(
+                self, "KI einrichten",
+                "Die lokale KI ist auf diesem Rechner noch nicht eingerichtet.\n\n"
+                "Blackline 2 kann das KI-Programm, ein Sprachmodell (2,5–5 GB) und die deutschen "
+                "Texterkennungsdaten jetzt herunterladen. Alles bleibt auf diesem Rechner.\n\n"
+                "Jetzt einrichten?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            self.open_setup()
+
+    def open_setup(self) -> None:
+        from blackline2.gui.setup_dialog import SetupDialog
+
+        if not self._can_start():
+            return
+        dlg = SetupDialog(self.settings, self)
+        dlg.finished_ok.connect(self.ai.start)
+        dlg.exec()
 
     def show_ai_details(self) -> None:
         d = QDialog(self)
@@ -220,8 +252,8 @@ class MainWindow(QMainWindow):
                 "<br>Die KI läuft ausschließlich auf diesem Rechner (127.0.0.1) und wird beim "
                 "Schließen von Blackline 2 automatisch beendet."]
         if self.ai.state == aim.MISSING:
-            info.append("<br><b>Einrichtung:</b> Im Programmordner ausführen:<br>"
-                        "<code>python -m blackline2.setup_ki</code>")
+            info.append("<br><b>Einrichtung:</b> Menü „Datei → KI einrichten“ (oder im Programmordner "
+                        "<code>python -m blackline2.setup_ki</code>).")
         lbl = QLabel("<br>".join(info))
         lbl.setWordWrap(True)
         lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -230,6 +262,9 @@ class MainWindow(QMainWindow):
         log.setReadOnly(True)
         lay.addWidget(log, 1)
         row = QHBoxLayout()
+        b_setup = QPushButton("KI einrichten …")
+        b_setup.clicked.connect(lambda: (d.accept(), self.open_setup()))
+        row.addWidget(b_setup)
         b_restart = QPushButton("KI neu starten")
         b_restart.clicked.connect(lambda: (self.ai.start(), d.accept()))
         b_stop = QPushButton("KI beenden")
@@ -609,6 +644,7 @@ class MainWindow(QMainWindow):
         self.view.set_manual_mode(self.act_manual.isChecked())
 
     def _manual_rect(self, rect: QRectF) -> None:
+        """Bereich aufgezogen: weiß zeigen und sofort das Kürzel abfragen (Enter übernimmt)."""
         d = self.current
         if d is None:
             return
@@ -616,34 +652,29 @@ class MainWindow(QMainWindow):
         p = d.pages[self.page_no]
         word_ids = d.words_in(self.page_no, r)
         phrase = " ".join(p.words[i].text for i in word_ids).strip(".,;:!?()[]\"'„“") if word_ids else ""
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Manuell schwärzen")
-        form = QFormLayout(dlg)
-        labels = sorted({h.label for dd in self.docs for h in dd.hits} | {"geschwärzt"})
-        combo = QComboBox()
-        combo.setEditable(True)
-        combo.addItems(labels)
-        combo.setCurrentText("geschwärzt")
-        form.addRow("Kürzel:", combo)
-        every = QCheckBox(f"Text „{phrase[:60]}“ auch überall sonst schwärzen (alle Dokumente)")
-        every.setChecked(bool(phrase) and len(phrase) >= 3)
-        every.setEnabled(bool(phrase))
-        form.addRow(every)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
-        form.addRow(bb)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        labels = sorted({h.label for dd in self.docs for h in dd.hits} | {"geschwärzt", "Mandant", "Gegner"})
+        self.view.begin_label_edit(rect, labels, phrase, default=self._last_manual_label)
+        self.status_msg.setText("Kürzel eingeben und Enter drücken – Esc bricht ab.")
+
+    def _rect_labeled(self, rect: QRectF, label: str, everywhere: bool) -> None:
+        d = self.current
+        if d is None:
             return
-        label = combo.currentText().strip() or "geschwärzt"
+        self._last_manual_label = label
+        r = (rect.left(), rect.top(), rect.right(), rect.bottom())
+        p = d.pages[self.page_no]
+        word_ids = d.words_in(self.page_no, r)
+        phrase = " ".join(p.words[i].text for i in word_ids).strip(".,;:!?()[]\"'„“") if word_ids else ""
         d.hits.append(Hit(page=self.page_no, segments=[], text=phrase or "(manueller Bereich)", label=label,
                           category="manuell", priority=PRIO_MANUAL, rects=[r]))
-        if every.isChecked() and phrase:
+        msg = f"Bereich als „{label}“ geschwärzt."
+        if everywhere and phrase:
             n = apply_user_term(self.docs, phrase, label, self.settings.fuzzy_matching)
-            self.status_msg.setText(f"„{phrase}“ → „{label}“: {n} weitere Stelle(n) geschwärzt.")
+            msg = f"„{phrase}“ → „{label}“: Bereich und {n} weitere Stelle(n) geschwärzt."
         d.analyzed = True
         self._refresh_all()
         self._update_actions()
+        self.status_msg.setText(msg)
 
     def _remove_hit(self, hit_id: int) -> None:
         if self.current:
@@ -947,7 +978,9 @@ HELP_TEXT = """So funktioniert Blackline 2:
    oben im Reiter beantworten – die Antwort gilt für alle gleichen Stellen.
    Rechtsklick auf ein Wort = nachträglich überall schwärzen.
    Gelb gestrichelt = ungelesene Bereiche (Handschrift, Stempel): ansehen
-   und bei Bedarf anklicken. „Vorschau Schwärzung“ zeigt das Ergebnis.
+   und bei Bedarf anklicken. „Vorschau Schwärzung“ zeigt das Ergebnis;
+   dort einfach einen Bereich mit der Maus aufziehen, das Kürzel tippen
+   und Enter drücken (Shift+Ziehen geht in jeder Ansicht).
 
 5. „Geschwärzt speichern“: Die Stellen werden weiß überdeckt und mit dem
    Kürzel in schwarzer Schrift beschriftet. Das Original bleibt unverändert.

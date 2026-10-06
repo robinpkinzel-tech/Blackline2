@@ -132,3 +132,64 @@ def test_gui_questions_and_everywhere(fake_server, tmp_path):
     w.close()
     _wait(app, lambda: False, 0.5)
     assert w.ai.server is None
+
+
+def test_gui_inline_label_editor(fake_server, tmp_path):
+    """Bereich aufziehen -> Eingabefeld erscheint sofort -> Enter übernimmt das Kürzel."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtWidgets import QApplication
+
+    try:
+        app = QApplication.instance() or QApplication(sys.argv)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Qt nicht startbar: {exc}")
+    import pymupdf
+
+    from blackline2.gui.main_window import MainWindow
+    from blackline2.settings import Settings
+
+    pdf = tmp_path / "c.pdf"
+    d = pymupdf.open()
+    p = d.new_page()
+    p.insert_text((60, 80), "Zeuge Jens Beispiel wohnt in Wetzlar.", fontsize=11)
+    p.insert_text((60, 100), "Wetzlar ist schön.", fontsize=11)
+    d.save(pdf)
+
+    exe, model = fake_server
+    s = Settings()
+    s.llama_server_path, s.model_path = str(exe), str(model)
+    s.ki_mode = "aus"
+    w = MainWindow(s)
+    w.show()
+    w.load_files([pdf])
+    assert _wait(app, lambda: w.worker is None and w.docs)
+    doc = w.docs[0]
+
+    # Rechteck um das Wort "Wetzlar" in Zeile 1 (Vorschau-Modus: Ziehen = Schwärzen)
+    w.act_preview.setChecked(True)
+    w._refresh_view()
+    assert w.view.preview_mode
+    idx = next(i for i, wd in enumerate(doc.pages[0].words) if wd.text.startswith("Wetzlar"))
+    x0, y0, x1, y1 = doc.pages[0].words[idx].bbox
+    rect = QRectF(x0 - 1, y0 - 1, x1 - x0 + 2, y1 - y0 + 2)
+    w.view.rect_drawn.emit(rect)
+    assert w.view.active_editor is not None, "Eingabefeld erschien nicht"
+    assert w.view.active_everywhere is not None and w.view.active_everywhere.isVisible()
+
+    w.view.active_editor.setText("Ort")
+    w.view.active_editor.confirmed.emit()
+    _wait(app, lambda: w.view.active_editor is None, 5)
+    assert w.view.active_editor is None
+    hits = {(h.text, h.label, h.priority) for h in doc.hits}
+    assert ("Wetzlar", "Ort", 0) in hits            # der gezogene Bereich
+    assert any(t == "Wetzlar" and l == "Ort" and pr == 5 for t, l, pr in hits), hits  # überall gefunden
+    assert "Ort" in w.status_msg.text()
+
+    # Esc bricht ab
+    w.view.rect_drawn.emit(QRectF(10, 10, 50, 20))
+    assert w.view.active_editor is not None
+    w.view.active_editor.cancelled.emit()
+    _wait(app, lambda: w.view.active_editor is None, 5)
+    assert w.view.active_editor is None
+    assert len([h for h in doc.hits if h.text == "(manueller Bereich)"]) == 0
+    w.close()

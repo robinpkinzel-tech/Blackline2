@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import multiprocessing
+import os
 import signal
 import sys
 import traceback
@@ -62,6 +63,10 @@ def main() -> int:
     timer.start(500)
     timer.timeout.connect(lambda: None)  # Python-Signale verarbeiten lassen
 
+    if os.environ.get("BLACKLINE2_SELFTEST"):
+        # Start-Prüfung für gepackte Programme: Fenster aufbauen, kurz laufen, sauber beenden
+        win.auto_offer_setup = False
+        QTimer.singleShot(2500, lambda: (print("SELFTEST OK", flush=True), app.quit()))
     win.show()
     QTimer.singleShot(0, win.start_ai)
     if len(sys.argv) > 1:

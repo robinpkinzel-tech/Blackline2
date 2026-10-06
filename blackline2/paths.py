@@ -14,8 +14,21 @@ def app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def data_root() -> Path:
+    """Ablage für KI und OCR-Daten.
+
+    Beim Start aus dem Quellcode neben dem Programm; als gepackte App (Mac .app,
+    Windows .exe) im Benutzerordner, weil der App-Ordner bei Updates ersetzt wird.
+    """
+    return config_dir() if is_frozen() else app_root()
+
+
 def ki_dir() -> Path:
-    return app_root() / "ki"
+    return data_root() / "ki"
 
 
 def ki_models_dir() -> Path:
@@ -27,7 +40,16 @@ def ki_server_dir() -> Path:
 
 
 def tessdata_dir() -> Path:
-    return app_root() / "ocr" / "tessdata"
+    return data_root() / "ocr" / "tessdata"
+
+
+def _ki_roots() -> list[Path]:
+    roots = [ki_dir(), app_root() / "ki", config_dir() / "ki"]
+    out: list[Path] = []
+    for r in roots:
+        if r not in out:
+            out.append(r)
+    return out
 
 
 def config_dir() -> Path:
@@ -49,25 +71,27 @@ def server_exe_name() -> str:
 
 
 def find_llama_server() -> Path | None:
-    """Sucht llama-server im KI-Ordner (auch in Unterordnern aus dem ZIP)."""
-    base = ki_server_dir()
-    if not base.exists():
-        return None
-    direct = base / server_exe_name()
-    if direct.is_file():
-        return direct
-    for candidate in sorted(base.rglob(server_exe_name())):
-        if candidate.is_file():
-            return candidate
+    """Sucht llama-server in den KI-Ordnern (auch in Unterordnern aus dem ZIP)."""
+    for root in _ki_roots():
+        base = root / "llama.cpp"
+        if not base.exists():
+            continue
+        direct = base / server_exe_name()
+        if direct.is_file():
+            return direct
+        for candidate in sorted(base.rglob(server_exe_name())):
+            if candidate.is_file():
+                return candidate
     return None
 
 
 def find_model() -> Path | None:
-    """Nimmt das erste .gguf-Modell im Modellordner (größte Datei zuerst)."""
-    base = ki_models_dir()
-    if not base.exists():
-        return None
-    models = [p for p in base.glob("*.gguf") if p.is_file() and not p.name.startswith("mmproj")]
+    """Nimmt das größte .gguf-Modell aus den Modellordnern."""
+    models: list[Path] = []
+    for root in _ki_roots():
+        base = root / "modelle"
+        if base.exists():
+            models += [p for p in base.glob("*.gguf") if p.is_file() and not p.name.startswith("mmproj")]
     if not models:
         return None
     return max(models, key=lambda p: p.stat().st_size)
@@ -75,7 +99,7 @@ def find_model() -> Path | None:
 
 def find_tessdata() -> Path | None:
     """Tessdata-Ordner mit deu.traineddata finden (eigener Ordner bevorzugt)."""
-    candidates = [tessdata_dir()]
+    candidates = [tessdata_dir(), app_root() / "ocr" / "tessdata", config_dir() / "ocr" / "tessdata"]
     env = os.environ.get("TESSDATA_PREFIX")
     if env:
         candidates += [Path(env), Path(env) / "tessdata"]

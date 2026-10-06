@@ -18,13 +18,16 @@ import re
 import shutil
 import ssl
 import stat
+import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 from blackline2 import paths
@@ -53,6 +56,26 @@ TESSDATA = {
 }
 
 UA = {"User-Agent": "Blackline2-Setup"}
+
+# Fortschritt: in der Konsole gedruckt oder (aus der Oberfläche) an einen Callback gemeldet
+REPORTER: Callable[[str, int, int], None] | None = None
+CANCEL: threading.Event | None = None
+
+
+class SetupCancelled(Exception):
+    pass
+
+
+def _say(msg: str, done: int = 0, total: int = 0) -> None:
+    if REPORTER is not None:
+        REPORTER(msg, done, total)
+    else:
+        print(msg, flush=True)
+
+
+def _check_cancel() -> None:
+    if CANCEL is not None and CANCEL.is_set():
+        raise SetupCancelled()
 
 
 # ---------------------------------------------------------------- Download-Hilfen
@@ -104,6 +127,7 @@ def download(url: str, target: Path, label: str) -> Path:
                 last = 0.0
                 with open(part, mode) as f:
                     while True:
+                        _check_cancel()
                         chunk = r.read(1 << 20)
                         if not chunk:
                             break
@@ -113,11 +137,16 @@ def download(url: str, target: Path, label: str) -> Path:
                         if now - last > 0.5:
                             last = now
                             if total:
-                                print(f"\r  {label}: {done / 2**20:,.0f} / {total / 2**20:,.0f} MB "
-                                      f"({100 * done / total:4.1f} %)", end="", flush=True)
+                                text = (f"{label}: {done / 2**20:,.0f} / {total / 2**20:,.0f} MB "
+                                        f"({100 * done / total:4.1f} %)")
                             else:
-                                print(f"\r  {label}: {done / 2**20:,.0f} MB", end="", flush=True)
-            print()
+                                text = f"{label}: {done / 2**20:,.0f} MB"
+                            if REPORTER is not None:
+                                REPORTER(text, done, total or 0)
+                            else:
+                                print("\r  " + text, end="", flush=True)
+            if REPORTER is None:
+                print()
             part.replace(target)
             return target
         except urllib.error.HTTPError as exc:
@@ -126,7 +155,7 @@ def download(url: str, target: Path, label: str) -> Path:
                 return target
             raise
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
-            print(f"\n  Verbindungsproblem ({exc}) – neuer Versuch {attempt + 2}/5 …")
+            _say(f"Verbindungsproblem ({exc}) – neuer Versuch {attempt + 2}/5 …")
             time.sleep(3 * (attempt + 1))
     raise RuntimeError(f"Download von {label} nicht möglich.")
 
@@ -134,15 +163,15 @@ def download(url: str, target: Path, label: str) -> Path:
 # ---------------------------------------------------------------- OCR
 
 def setup_ocr(variant: str = "standard", langs: tuple[str, ...] = ("deu", "eng")) -> None:
-    print("\n== Texterkennung (OCR-Sprachdaten) ==")
+    _say("== Texterkennung (OCR-Sprachdaten) ==")
     target_dir = paths.tessdata_dir()
     for lang in langs:
         target = target_dir / f"{lang}.traineddata"
         if target.exists() and target.stat().st_size > 1_000_000:
-            print(f"  {lang}.traineddata ist bereits vorhanden.")
+            _say(f"  {lang}.traineddata ist bereits vorhanden.")
             continue
         download(TESSDATA[variant].format(lang=lang), target, f"{lang}.traineddata")
-    print(f"  OK – gespeichert in {target_dir}")
+    _say(f"  OK – gespeichert in {target_dir}")
 
 
 # ---------------------------------------------------------------- llama.cpp
@@ -242,7 +271,7 @@ def list_llama_releases() -> list[dict]:
         if isinstance(rels, list) and rels:
             return rels
     except urllib.error.HTTPError as exc:
-        print(f"  GitHub-API nicht nutzbar ({exc.code}) – lese Release-Seite …")
+        _say(f"  GitHub-API nicht nutzbar ({exc.code}) – lese Release-Seite …")
     return _releases_from_web()
 
 
@@ -277,10 +306,10 @@ def _extract(archive: Path, dest: Path) -> None:
 
 
 def setup_llama(gpu: str = "cpu") -> Path:
-    print("\n== KI-Programm (llama.cpp / llama-server) ==")
+    _say("== KI-Programm (llama.cpp / llama-server) ==")
     rel, asset = find_llama_asset(gpu)
     assets = rel.get("assets", [])
-    print(f"  Version {rel.get('tag_name')}: {asset['name']}")
+    _say(f"  Version {rel.get('tag_name')}: {asset['name']}")
     dest = paths.ki_server_dir()
     tmp = paths.ki_dir() / "_download"
     archive = download(asset["browser_download_url"], tmp / asset["name"], asset["name"])
@@ -303,7 +332,12 @@ def setup_llama(gpu: str = "cpu") -> Path:
         for f in server.parent.iterdir():
             if f.is_file() and (f.name.startswith("llama-") or f.suffix in (".so", ".dylib") or "." not in f.name):
                 f.chmod(f.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP)
-    print(f"  OK – {server}")
+    if sys.platform == "darwin":
+        # Apple Silicon führt nur signierte Programme aus – eine Ad-hoc-Signatur genügt
+        for f in server.parent.iterdir():
+            if f.is_file():
+                subprocess.run(["codesign", "--force", "--sign", "-", str(f)], capture_output=True, check=False)
+    _say(f"  OK – {server}")
     return server
 
 
@@ -311,7 +345,7 @@ def setup_llama(gpu: str = "cpu") -> Path:
 
 def setup_model(choice: str) -> Path:
     info = MODELS[choice]
-    print(f"\n== KI-Modell: {info['info']} ==")
+    _say(f"== KI-Modell: {info['info']} ==")
     data = get_json(f"https://huggingface.co/api/models/{info['repo']}")
     files = [s["rfilename"] for s in data.get("siblings", [])] if isinstance(data, dict) else []
     cands = [f for f in files if re.search(info["pattern"], f, re.I) and "mmproj" not in f.lower()]
@@ -320,7 +354,7 @@ def setup_model(choice: str) -> Path:
     fname = sorted(cands, key=len)[0]
     target = paths.ki_models_dir() / Path(fname).name
     if target.exists():
-        print(f"  {target.name} ist bereits vorhanden.")
+        _say(f"  {target.name} ist bereits vorhanden.")
     else:
         url = f"https://huggingface.co/{info['repo']}/resolve/main/{fname}?download=true"
         download(url, target, target.name)
@@ -330,8 +364,29 @@ def setup_model(choice: str) -> Path:
     s = Settings.load()
     s.model_path = str(target)
     s.save()
-    print(f"  OK – {target}")
+    _say(f"  OK – {target}")
     return target
+
+
+# ---------------------------------------------------------------- Gesamtablauf (für die Oberfläche)
+
+def run_setup(modell: str = "ausgewogen", gpu: str = "cpu", ocr: bool = True, ki: bool = True,
+              reporter: Callable[[str, int, int], None] | None = None,
+              cancel: threading.Event | None = None) -> Path | None:
+    """Alles einrichten; Fortschritt an reporter(msg, done, total). Liefert den Modellpfad."""
+    global REPORTER, CANCEL
+    REPORTER, CANCEL = reporter, cancel
+    try:
+        if ocr:
+            setup_ocr()
+        model = None
+        if ki:
+            setup_llama(gpu)
+            model = setup_model(modell)
+        _say("Fertig.")
+        return model
+    finally:
+        REPORTER, CANCEL = None, None
 
 
 # ---------------------------------------------------------------- Selbsttest
@@ -345,20 +400,20 @@ def self_test() -> bool:
     from blackline2.model import PageData, Word
     from blackline2.settings import Settings
 
-    print("\n== Selbsttest der KI ==")
+    _say("== Selbsttest der KI ==")
     s = Settings.load()
     server = Path(s.llama_server_path) if s.llama_server_path else paths.find_llama_server()
     model = Path(s.model_path) if s.model_path else paths.find_model()
     if not server or not model:
-        print("  KI ist noch nicht eingerichtet.")
+        _say("  KI ist noch nicht eingerichtet.")
         return False
     srv = LocalAIServer(server, model, s.ki_context, s.ki_threads, s.ki_gpu_layers, s.ki_extra_args)
     t0 = time.monotonic()
     try:
         srv.start()
-        print("  Modell wird geladen …")
+        _say("  Modell wird geladen …")
         srv.wait_ready(s.ki_start_timeout)
-        print(f"  geladen nach {time.monotonic() - t0:.0f} s")
+        _say(f"  geladen nach {time.monotonic() - t0:.0f} s")
         text = ("Sehr geehrte Frau Petra Musterfrau, wie mit Herrn Kinzel besprochen, "
                 "überweisen Sie bitte an Herrn Jens Beispiel, Bahnhofstraße 7, 35578 Wetzlar.")
         page = PageData(0, 595, 842, [Word(t, (0, 0, 1, 1), 0) for t in text.split()])
@@ -366,17 +421,17 @@ def self_test() -> bool:
                          UserInputs(mandant_name="Robin Kinzel"))
         t1 = time.monotonic()
         found = det.analyze_page(page, 1, 1)
-        print(f"  Antwort nach {time.monotonic() - t1:.0f} s:")
+        _say(f"  Antwort nach {time.monotonic() - t1:.0f} s:")
         for f in found:
-            print(f"    - {f.kategorie:12} {f.text!r:32} ({f.bezug})")
+            _say(f"    - {f.kategorie:12} {f.text!r:32} ({f.bezug})")
         return bool(found)
     except Exception as exc:  # noqa: BLE001
-        print(f"  FEHLER: {exc}")
-        print("  Letzte Meldungen des KI-Servers:\n    " + "\n    ".join(list(srv.log)[-10:]))
+        _say(f"  FEHLER: {exc}")
+        _say("  Letzte Meldungen des KI-Servers:\n    " + "\n    ".join(list(srv.log)[-10:]))
         return False
     finally:
         srv.stop()
-        print("  KI wieder beendet.")
+        _say("  KI wieder beendet.")
 
 
 def check_sources() -> bool:
@@ -384,22 +439,22 @@ def check_sources() -> bool:
     for gpu in ("cpu", "vulkan", "cuda"):
         try:
             rel, a = find_llama_asset(gpu)
-            print(f"  llama.cpp {gpu:6}: {rel.get('tag_name')} {a['name']}")
+            _say(f"  llama.cpp {gpu:6}: {rel.get('tag_name')} {a['name']}")
         except RuntimeError as exc:
-            print(f"  llama.cpp {gpu:6}: NICHT GEFUNDEN – {exc}")
+            _say(f"  llama.cpp {gpu:6}: NICHT GEFUNDEN – {exc}")
             ok &= gpu != "cpu"
     for key, info in MODELS.items():
         data = get_json(f"https://huggingface.co/api/models/{info['repo']}")
         files = [s["rfilename"] for s in data.get("siblings", [])] if isinstance(data, dict) else []
         cands = [f for f in files if re.search(info["pattern"], f, re.I) and "mmproj" not in f.lower()]
-        print(f"  Modell {key:10}: {cands[0] if cands else 'NICHT GEFUNDEN'}")
+        _say(f"  Modell {key:10}: {cands[0] if cands else 'NICHT GEFUNDEN'}")
         ok &= bool(cands)
     for variant, url in TESSDATA.items():
         try:
             with _open(url.format(lang="deu"), {"Range": "bytes=0-99"}):
-                print(f"  OCR {variant:8}: erreichbar")
+                _say(f"  OCR {variant:8}: erreichbar")
         except Exception as exc:  # noqa: BLE001
-            print(f"  OCR {variant:8}: FEHLER {exc}")
+            _say(f"  OCR {variant:8}: FEHLER {exc}")
             ok = False
     return ok
 
@@ -438,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
             setup_llama(args.gpu)
             setup_model(args.modell)
             self_test()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SetupCancelled):
         print("\nAbgebrochen. Ein erneuter Aufruf setzt angefangene Downloads fort.")
         return 130
     except Exception as exc:  # noqa: BLE001

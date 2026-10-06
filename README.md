@@ -25,6 +25,10 @@ auch wenn das Programm abstürzt oder per Task-Manager beendet wird.
 
 *Vorschau der fertigen Schwärzung: weiß überdeckt, Kürzel in schwarzer Schrift.*
 
+![Selbst schwärzen](docs/direkt_schwaerzen.png)
+
+*Selbst schwärzen: Bereich aufziehen, das Eingabefeld erscheint sofort, Kürzel tippen, Enter.*
+
 ---
 
 ## Funktionen
@@ -52,7 +56,39 @@ die Word-Datei bleibt unverändert.
 
 ---
 
-## Einrichtung unter Windows (einmalig)
+## Fertige Programme für Mac und Windows
+
+Unter **[Releases](https://github.com/robinpkinzel-tech/Blackline2/releases)** liegen fertige Programme,
+die ohne Python-Installation laufen. Sie werden automatisch von GitHub gebaut
+(`.github/workflows/release.yml`).
+
+### Mac (Apple Silicon, macOS 12 oder neuer)
+
+1. `Blackline2-macOS.dmg` herunterladen und öffnen.
+2. „Blackline 2“ in den Ordner **Programme** ziehen.
+3. **Erster Start:** Im Finder → Programme → Rechtsklick auf „Blackline 2“ → **Öffnen** → im Hinweisfenster
+   noch einmal **Öffnen**. macOS warnt, weil die App nicht bei Apple notarisiert ist (das kostet ein
+   Entwicklerkonto). Erscheint kein „Öffnen“-Knopf (macOS 15): **Systemeinstellungen → Datenschutz &
+   Sicherheit** → ganz unten **„Dennoch öffnen“**. Das ist nur beim ersten Mal nötig.
+4. Blackline 2 fragt, ob die KI eingerichtet werden soll → **Ja** → Modell wählen → **Einrichtung
+   starten** (Download 2,5–5 GB, einmalig). Die Grafikeinheit des Mac wird automatisch genutzt.
+
+Die KI und die Texterkennungsdaten landen in `~/Library/Application Support/Blackline2/`.
+Später lässt sich alles über **Datei → KI einrichten / aktualisieren** ändern.
+
+### Windows (fertiges Programm statt Python)
+
+1. `Blackline2-Windows.zip` herunterladen, z. B. nach `C:\Blackline2` entpacken.
+2. `Blackline 2.exe` starten. SmartScreen: „Weitere Informationen“ → „Trotzdem ausführen“.
+3. KI-Einrichtung wie oben; Ablage in `%APPDATA%\Blackline2\`.
+
+Neue Version veröffentlichen (für Entwickler): auf GitHub unter **Releases → Draft a new release** einen
+Tag `v0.2.0` o. ä. anlegen und veröffentlichen – der Workflow baut die Dateien und hängt sie an.
+Ohne Tag liefert **Actions → Release → Run workflow** die Dateien als Artefakte.
+
+---
+
+## Einrichtung unter Windows aus dem Quellcode (einmalig)
 
 Voraussetzungen: Windows 10/11, mind. 16 GB RAM empfohlen, ca. 8 GB freier Speicher.
 
@@ -110,8 +146,10 @@ Eigenes Modell: Jede `.gguf`-Datei in `ki\modelle\` kann verwendet werden
      **Strg+Klick** = nur diese Stelle
    * **Rechtsklick auf ein Wort** = nachträglich überall schwärzen, Kürzel wählen
    * Rechtsklick in der Liste = Kürzel ändern (z. B. „Person A“ → „Zeuge 1“)
-   * „Bereich manuell schwärzen“ = fehlende Stelle mit der Maus aufziehen (enthaltener Text wird
-     auf Wunsch überall gesucht)
+   * **Selbst schwärzen:** In der „Vorschau Schwärzung“ (oder mit Shift+Ziehen in jeder Ansicht) einen
+     Bereich mit der Maus aufziehen – er wird sofort weiß, direkt darunter erscheint das Eingabefeld für
+     das Kürzel. Tippen, **Enter** – fertig. Häkchen „auch überall“ schwärzt den enthaltenen Text
+     zusätzlich in allen Dokumenten. Esc bricht ab.
    * „Vorschau Schwärzung“ = so sieht das Ergebnis aus
 5. **Geschwärzt speichern** – Zielordner wählen; Dateien erhalten den Zusatz `_geschwärzt`.
 
@@ -177,6 +215,9 @@ blackline2/
   detect_inputs.py   Mandant/Gegner/freie Begriffe
   detect_names.py    Sicherheitsnetz: Namen nach Anreden und Rollen
   session.py         Vorgang sichern/laden (.blackline2)
+  setup_ki.py        Download von llama.cpp, Modell und OCR-Daten (Konsole und Oberfläche)
+  gui/setup_dialog.py Einrichtung aus dem Programm heraus
+packaging/           PyInstaller-Spec und Symbol für die fertigen Programme
   labels.py          Kürzel und Personenverwaltung (Person A, B, …)
   ai/server.py       Start/Stopp von llama-server (Job-Objekt, PDEATHSIG, Wächter)
   ai/client.py       OpenAI-kompatibler Client (nur localhost)
@@ -193,6 +234,5 @@ Durchlauf Scan → OCR → KI → Schwärzung → erneute OCR-Prüfung des Ergeb
 
 ## Nächste Schritte
 
-* Fertige Windows-Installation als einzelne .exe (PyInstaller)
 * Tabellen mit Spaltenüberschriften („Geburtsdatum“ über einer Spalte) regelbasiert erkennen
 * Durchlauf mit dem Standardmodell „ausgewogen“ in der CI (manuell über „Run workflow“ wählbar)

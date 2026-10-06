@@ -1,0 +1,114 @@
+name: Release (fertige Programme)
+
+# Baut Blackline 2 als fertige Programme:
+#   * macOS (Apple Silicon): Blackline2-macOS.dmg und .zip
+#   * Windows: Blackline2-Windows.zip (Ordner mit "Blackline 2.exe")
+# Bei einem Tag "v*" werden die Dateien an die GitHub-Veröffentlichung angehängt,
+# bei manuellem Start ("Run workflow") liegen sie als Artefakte am Lauf.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Bauen (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Abhängigkeiten
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Programmsymbol
+        run: python packaging/make_icon.py
+      - name: Bauen
+        run: pyinstaller --noconfirm --clean packaging/Blackline2.spec
+
+      - name: Startprüfung (macOS)
+        if: runner.os == 'macOS'
+        env:
+          BLACKLINE2_SELFTEST: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          "dist/Blackline 2.app/Contents/MacOS/Blackline 2" | tee selftest.log
+          grep -q "SELFTEST OK" selftest.log
+      - name: Startprüfung (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          BLACKLINE2_SELFTEST: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $p = Start-Process -FilePath "dist\Blackline 2\Blackline 2.exe" -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "Programm endete mit Code $($p.ExitCode)" }
+
+      - name: Verpacken (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          mkdir -p staging
+          cp -R "dist/Blackline 2.app" staging/
+          ln -s /Applications staging/Programme
+          hdiutil create -volname "Blackline 2" -srcfolder staging -ov -format UDZO Blackline2-macOS.dmg
+          ditto -c -k --sequesterRsrc --keepParent "dist/Blackline 2.app" Blackline2-macOS.zip
+          ls -la Blackline2-macOS.*
+      - name: Verpacken (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist\Blackline 2" -DestinationPath Blackline2-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Blackline2-${{ matrix.name }}
+          path: |
+            Blackline2-*.dmg
+            Blackline2-*.zip
+          if-no-files-found: error
+
+  release:
+    name: Veröffentlichen
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dateien
+          merge-multiple: true
+      - name: Hinweise
+        run: |
+          cat > hinweise.md <<'EOF'
+          ## Installation
+
+          **Mac (Apple Silicon, macOS 12 oder neuer):** `Blackline2-macOS.dmg` öffnen und „Blackline 2“ in den
+          Ordner „Programme“ ziehen. Beim **ersten Start** meldet macOS, der Entwickler sei nicht verifiziert
+          (die App ist nicht bei Apple notarisiert). Dann: Programm im Finder mit **Rechtsklick → Öffnen → Öffnen**
+          starten. Falls kein „Öffnen“-Knopf erscheint (macOS 15): **Systemeinstellungen → Datenschutz & Sicherheit**
+          → ganz unten **„Dennoch öffnen“**. Das ist nur einmal nötig.
+
+          **Windows 10/11:** `Blackline2-Windows.zip` entpacken (z. B. nach `C:\Blackline2`) und
+          `Blackline 2.exe` starten. Der SmartScreen-Hinweis „Unbekannter Herausgeber“ wird mit
+          „Weitere Informationen → Trotzdem ausführen“ bestätigt.
+
+          **Beim ersten Start** bietet Blackline 2 an, die KI einzurichten (Download 2,5–5 GB, einmalig).
+          Danach läuft alles ohne Internet auf dem eigenen Rechner.
+          EOF
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dateien/*
+          body_path: hinweise.md
+          generate_release_notes: true

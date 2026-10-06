@@ -21,3 +21,5 @@ ocr/
 !docs/*.png
 !tests/data/*
 .ruff_cache/
+packaging/build/
+*.spec.bak
