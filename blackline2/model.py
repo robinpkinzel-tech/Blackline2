@@ -27,6 +27,7 @@ SOURCE_NAMES = {
     PRIO_PATTERN: "Regel",
     PRIO_AI: "KI",
     PRIO_INPUT_PART: "Eingabe (Teil)",
+    45: "Regel (Anrede)",
     PRIO_AI_SPREAD: "KI (übertragen)",
 }
 

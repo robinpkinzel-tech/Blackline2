@@ -26,6 +26,7 @@ auch wenn das Programm abstürzt oder per Task-Manager beendet wird.
 | **Texterkennung (OCR)** | Eingescannte Seiten werden mit 300 dpi gelesen. Schief eingescannte Seiten werden begradigt, auf dem Kopf stehende oder quer liegende Seiten erkannt und aufgerichtet, Grauschleier/ungleichmäßige Ausleuchtung ausgeglichen. Digitale PDFs werden direkt gelesen. |
 | **Ihre Angaben** | Mandant (Name, Adresse), Gegner (Name, Adresse) und 5 freie Felder „Suchbegriff → Kürzel“. Mehrere Angaben je Feld mit `;` trennen. Gefunden werden auch Varianten: nur Nachname, „R. Kinzel“, „Kinzels“, Silbentrennung („Kin-/zel“), OCR-Fehler („Kinzei“), „Str.“/„Straße“. |
 | **KI** | Liest jede Seite vollständig und meldet alle Namen und persönlichen Daten natürlicher Personen. Jede Person bekommt ein festes Kürzel (Person A, Person B …), das in allen Dokumenten des Vorgangs gleich bleibt. Was die KI auf einer Seite findet, wird automatisch auch auf allen anderen Seiten geschwärzt. Erfundene Funde („Halluzinationen“) werden verworfen, weil nur geschwärzt wird, was wirklich im Text steht. |
+| **Sicherheitsnetz für Namen** | Unabhängig von der KI gilt jedes Wort nach Anreden und Rollen („Herr“, „Frau“, „Dr.“, „Zeugin“, „Nachbarin“, „Kläger“ …) als Name – auch im Anschriftenfeld („Herrn“ / nächste Zeile). So bleibt kein Name stehen, nur weil die KI ihn übersehen hat. |
 | **Feste Regeln** | E-Mail, Telefon/Handy/Fax, IBAN (mit Prüfziffer) und Kontonummern, Sozialversicherungs-/Renten-/Krankenversichertennummern, Versicherungsscheinnummern, Geburtsdaten („geb.“, „geb. am“, „geboren am“, „Geburtsdatum:“, „\*“), Geburtsort und Geburtsname. |
 | **Prüfen** | Alle Funde farbig markiert, Klick schaltet einzelne Stellen ab/an, Liste nach Kürzel gruppiert, Kürzel umbenennbar, fehlende Stellen per Maus manuell aufziehen, Vorschau des Endergebnisses. |
 | **Speichern** | Standard „Bild-PDF“: Jede Seite wird als Bild neu aufgebaut, die Bildpunkte unter den Schwärzungen werden überschrieben – es bleibt nichts Verstecktes übrig. Alternativ „Text-PDF“ (durchsuchbar) mit echter PDF-Redaction und automatischer Nachprüfung. Das Original wird nie verändert. |
@@ -108,6 +109,9 @@ türkis = IBAN, braun = Versicherungsnr., pink = Geburtsdaten, grün = eigene Be
   Gespeichert werden nur technische Einstellungen (`%APPDATA%\Blackline2\einstellungen.json`).
 * **Sichere Schwärzung**: Im Bild-Modus enthält das Ergebnis nur noch Bildpunkte,
   unter den Schwärzungen weiß überschrieben. Metadaten werden entfernt.
+* **Plausibilitätsprüfung der KI**: Die KI darf eine Person nur dann „Mandant“ oder „Gegner“
+  nennen, wenn der Name zu Ihren Angaben passt. Gewöhnliche Daten (Zahlungs-, Termindaten)
+  werden nicht als Geburtsdatum geschwärzt, Rollenwörter („Zeugin“) nie als Namensteil.
 * **Kontrolle bleibt beim Menschen**: Die KI ist ein Hilfsmittel. Bitte das Ergebnis
   vor der Weitergabe in der Vorschau prüfen.
 

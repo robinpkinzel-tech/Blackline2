@@ -20,12 +20,12 @@ from typing import Callable
 from blackline2.ai.client import AIClientError
 from blackline2.ai.detector import SETTINGS_CATEGORY, AIDetector, Finding
 from blackline2.detect_inputs import UserInputs, address_parts, detect_inputs, is_organisation, split_values
+from blackline2.detect_names import PRIO_SALUTATION, detect_salutation_names
 from blackline2.detect_patterns import MOBILE_PREFIX, detect_patterns
 from blackline2.labels import CATEGORY_LABELS, PersonRegistry, name_tokens
 from blackline2.loader import Cancelled
 from blackline2.matching import PageIndex, norm, tokenize, tokens_match
-from blackline2.model import (PRIO_AI, PRIO_AI_SPREAD, PRIO_INPUT_PART, PRIO_MANUAL, Document, Hit, PageData,
-                              Segment)
+from blackline2.model import PRIO_AI, PRIO_AI_SPREAD, PRIO_INPUT_PART, PRIO_MANUAL, Document, Hit, PageData, Segment
 from blackline2.settings import Settings
 
 ProgressFn = Callable[[int, int, str], None]
@@ -228,6 +228,12 @@ class Analyzer:
             new_hits[key] += detect_patterns(p, self.enabled)
             tick(f"{d.name}: Regeln, Seite {p.index + 1}")
 
+        # 1b) Sicherheitsnetz: Namen nach Anreden/Rollen ("Frau Gül Yilmaz", "Herrn\nRobin Kinzel")
+        if "name" in self.enabled:
+            for d, p in pages:
+                new_hits[(id(d), p.index)] += detect_salutation_names(
+                    p, self.registry, self.settings.ki_exclude_professionals)
+
         # 2) KI je Seite
         spread: list[tuple[Finding, str, str]] = []  # (Fund, Kürzel, Kategorie)
         if self.detector is not None:
@@ -298,7 +304,7 @@ class Analyzer:
             return
         for hits in new_hits.values():
             for h in hits:
-                if h.category != "name" or h.priority not in (PRIO_INPUT_PART, PRIO_AI_SPREAD):
+                if h.category != "name" or h.priority not in (PRIO_INPUT_PART, PRIO_SALUTATION, PRIO_AI_SPREAD):
                     continue
                 t = norm(h.text.split()[-1]) if h.text.split() else ""
                 for cand in (t, t[:-1] if t.endswith("s") else t):
