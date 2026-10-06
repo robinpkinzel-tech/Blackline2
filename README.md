@@ -29,7 +29,7 @@ auch wenn das Programm abstürzt oder per Task-Manager beendet wird.
 | **Sicherheitsnetz für Namen** | Unabhängig von der KI gilt jedes Wort nach Anreden und Rollen („Herr“, „Frau“, „Dr.“, „Zeugin“, „Nachbarin“, „Kläger“ …) als Name – auch im Anschriftenfeld („Herrn“ / nächste Zeile). So bleibt kein Name stehen, nur weil die KI ihn übersehen hat. |
 | **Feste Regeln** | E-Mail, Telefon/Handy/Fax, IBAN (mit Prüfziffer) und Kontonummern, Sozialversicherungs-/Renten-/Krankenversichertennummern, Versicherungsscheinnummern, Geburtsdaten („geb.“, „geb. am“, „geboren am“, „Geburtsdatum:“, „\*“), Geburtsort und Geburtsname. |
 | **Prüfen** | Alle Funde farbig markiert, Klick schaltet einzelne Stellen ab/an, Liste nach Kürzel gruppiert, Kürzel umbenennbar, fehlende Stellen per Maus manuell aufziehen, Vorschau des Endergebnisses. |
-| **Speichern** | Standard „Bild-PDF“: Jede Seite wird als Bild neu aufgebaut, die Bildpunkte unter den Schwärzungen werden überschrieben – es bleibt nichts Verstecktes übrig. Alternativ „Text-PDF“ (durchsuchbar) mit echter PDF-Redaction und automatischer Nachprüfung. Das Original wird nie verändert. |
+| **Speichern** | Standard „Bild-PDF“: Jede Seite wird als Bild neu aufgebaut, die Bildpunkte unter den Schwärzungen werden überschrieben – es bleibt nichts Verstecktes übrig. Alternativ „Text-PDF“ (durchsuchbar) mit echter PDF-Redaction und automatischer Nachprüfung. Namen im **Dateinamen** werden ebenfalls durch Kürzel ersetzt („Kinzel_Klage.pdf“ → „Mandant_Klage_geschwärzt.pdf“). Das Original wird nie verändert. |
 
 Unterstützte Dateien: PDF, PNG, JPG, TIFF (auch mehrseitig), BMP, GIF, WEBP.
 Word-Dateien folgen im nächsten Schritt.
@@ -109,6 +109,8 @@ türkis = IBAN, braun = Versicherungsnr., pink = Geburtsdaten, grün = eigene Be
   Gespeichert werden nur technische Einstellungen (`%APPDATA%\Blackline2\einstellungen.json`).
 * **Sichere Schwärzung**: Im Bild-Modus enthält das Ergebnis nur noch Bildpunkte,
   unter den Schwärzungen weiß überschrieben. Metadaten werden entfernt.
+  PDF-Kommentare, Stempel und Formularfelder werden vor der Analyse in die Seite
+  eingebrannt (Namen darin werden mitgeschwärzt), versteckte Notizen fallen weg.
 * **Plausibilitätsprüfung der KI**: Die KI darf eine Person nur dann „Mandant“ oder „Gegner“
   nennen, wenn der Name zu Ihren Angaben passt. Gewöhnliche Daten (Zahlungs-, Termindaten)
   werden nicht als Geburtsdatum geschwärzt, Rollenwörter („Zeugin“) nie als Namensteil.
