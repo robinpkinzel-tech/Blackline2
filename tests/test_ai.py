@@ -126,7 +126,8 @@ def test_finding_filters():
     assert clean({"text": "Personalnr. 4711", "kategorie": "quatsch", "bezug": ""}).kategorie == "sonstiges"
 
 
-def test_server_dies_when_app_crashes(fake_server, tmp_path):
+@pytest.mark.parametrize("force_guard", [False, True], ids=["Standard", "Wächter-Prozess (macOS)"])
+def test_server_dies_when_app_crashes(fake_server, tmp_path, force_guard):
     """Wird Blackline 2 hart beendet (Absturz/Task-Manager), darf die KI nicht weiterlaufen."""
     exe, model = fake_server
     root = Path(__file__).resolve().parent.parent
@@ -135,6 +136,7 @@ def test_server_dies_when_app_crashes(fake_server, tmp_path):
         f"sys.path.insert(0, {str(root)!r})\n"
         "from blackline2.ai.server import LocalAIServer\n"
         f"s = LocalAIServer({str(exe)!r}, {str(model)!r})\n"
+        f"s.force_guard = {force_guard!r}\n"
         "s.start(); s.wait_ready(30)\n"
         "print(s.proc.pid, flush=True)\n"
         "time.sleep(120)\n"

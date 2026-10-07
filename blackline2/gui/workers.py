@@ -14,7 +14,8 @@ from blackline2.loader import Cancelled
 class Worker(QThread):
     """Führt fn(progress, cancel, *args) in einem eigenen Thread aus."""
 
-    progress = Signal(int, int, str)
+    # object statt int: Download-Fortschritt in Bytes überschreitet bei großen Modellen 2^31
+    progress = Signal(object, object, str)
     succeeded = Signal(object)
     failed = Signal(str, str)  # Meldung, Details
     cancelled = Signal()

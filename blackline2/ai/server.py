@@ -125,29 +125,14 @@ def _linux_pdeathsig() -> None:  # läuft im Kindprozess vor exec
     libc.prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
 
 
-# Wächter für Systeme ohne Kernel-Mechanismus: startet den Server und beendet
-# ihn, sobald der Elternprozess (Blackline 2) verschwunden ist.
-_GUARD = r"""
-import os, signal, subprocess, sys, time
-parent = int(sys.argv[1]); cmd = sys.argv[2:]
-p = subprocess.Popen(cmd)
-def stop(*_):
-    try:
-        p.terminate(); p.wait(5)
-    except Exception:
-        p.kill()
-    sys.exit(0)
-signal.signal(signal.SIGTERM, stop)
-while p.poll() is None:
-    try:
-        os.kill(parent, 0)
-    except OSError:
-        stop()
-    if os.getppid() != parent:
-        stop()
-    time.sleep(1)
-sys.exit(p.returncode or 0)
-"""
+# Wächter ohne Python (läuft auch in gepackten Apps): startet den Server und beendet ihn,
+# sobald der Elternprozess (Blackline 2) nicht mehr existiert.
+_SH_GUARD = (
+    'parent=$1; shift; "$@" & child=$!; '
+    'trap \'kill "$child" 2>/dev/null; exit 0\' TERM INT HUP; '
+    'while kill -0 "$parent" 2>/dev/null && kill -0 "$child" 2>/dev/null; do sleep 1; done; '
+    'kill "$child" 2>/dev/null; wait "$child" 2>/dev/null'
+)
 
 
 def cleanup_stale_server() -> None:
@@ -180,6 +165,7 @@ class LocalAIServer:
         self.threads = threads
         self.gpu_layers = gpu_layers
         self.extra_args = extra_args
+        self.force_guard = False  # Tests: Wächter auch unter Linux verwenden
         self.proc: subprocess.Popen | None = None
         self.port = 0
         self.api_key = ""
@@ -224,10 +210,12 @@ class LocalAIServer:
             guard = False
             if sys.platform == "win32":
                 kwargs["creationflags"] = 0x08000000 | 0x00000200  # NO_WINDOW | NEW_PROCESS_GROUP
-            elif sys.platform.startswith("linux") and threading.current_thread() is threading.main_thread():
+            elif (sys.platform.startswith("linux") and threading.current_thread() is threading.main_thread()
+                  and not self.force_guard):
                 kwargs["preexec_fn"] = _linux_pdeathsig
-            elif not getattr(sys, "frozen", False):
-                cmd = [sys.executable, "-c", _GUARD, str(os.getpid())] + cmd
+            else:
+                # macOS u. a.: kein Kernel-Mechanismus -> kleiner Wächter-Prozess
+                cmd = ["/bin/sh", "-c", _SH_GUARD, "blackline-guard", str(os.getpid())] + cmd
                 guard = True
                 kwargs["start_new_session"] = True
             try:

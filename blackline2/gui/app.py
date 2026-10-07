@@ -7,45 +7,83 @@ import multiprocessing
 import os
 import signal
 import sys
+import threading
 import traceback
 from datetime import datetime
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 from blackline2 import APP_NAME
 from blackline2.settings import Settings
 
 
-def _install_error_handler() -> None:
-    """Unerwartete Fehler anzeigen und protokollieren (ohne Konsolenfenster sonst unsichtbar)."""
-    from blackline2 import paths
+class _ErrorBridge(QObject):
+    """Zeigt Fehlermeldungen immer im Haupt-Thread an (macOS erlaubt Fenster nur dort)."""
 
-    def hook(exc_type, exc, tb):
-        text = "".join(traceback.format_exception(exc_type, exc, tb))
-        try:
-            paths.config_dir().mkdir(parents=True, exist_ok=True)
-            with open(paths.config_dir() / "fehler.log", "a", encoding="utf-8") as f:
-                f.write(f"\n--- {datetime.now():%Y-%m-%d %H:%M:%S} ---\n{text}")
-        except OSError:
-            pass
+    show = Signal(str, str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.show.connect(self._show)  # Empfänger lebt im Haupt-Thread -> Aufrufe aus anderen Threads werden eingereiht
+        self._open = False
+
+    def _show(self, message: str, details: str) -> None:
+        if self._open:  # keine Dialoglawine bei Folgefehlern
+            return
+        self._open = True
         try:
             from PySide6.QtWidgets import QMessageBox
 
+            from blackline2 import paths
+
             box = QMessageBox(QMessageBox.Icon.Critical, APP_NAME,
-                              f"Unerwarteter Fehler: {exc}\n\nDetails stehen in {paths.config_dir() / 'fehler.log'}")
-            box.setDetailedText(text)
+                              f"Unerwarteter Fehler: {message}\n\nDetails stehen in "
+                              f"{paths.config_dir() / 'fehler.log'}")
+            box.setDetailedText(details)
             box.exec()
         except Exception:  # noqa: BLE001
-            sys.__excepthook__(exc_type, exc, tb)
+            pass
+        finally:
+            self._open = False
 
-    sys.excepthook = hook
+
+_bridge: _ErrorBridge | None = None
+
+
+def _log_error(text: str) -> None:
+    from blackline2 import paths
+
+    try:
+        paths.config_dir().mkdir(parents=True, exist_ok=True)
+        with open(paths.config_dir() / "fehler.log", "a", encoding="utf-8") as f:
+            f.write(f"\n--- {datetime.now():%Y-%m-%d %H:%M:%S} ---\n{text}")
+    except OSError:
+        pass
+
+
+def report_error(exc_type, exc, tb) -> None:
+    """Fehler protokollieren und (aus jedem Thread) im Haupt-Thread anzeigen."""
+    text = "".join(traceback.format_exception(exc_type, exc, tb))
+    _log_error(text)
+    if _bridge is not None:
+        _bridge.show.emit(str(exc), text)  # aus Nebenthreads automatisch eingereiht
+    else:
+        sys.__excepthook__(exc_type, exc, tb)
+
+
+def _install_error_handler() -> None:
+    """Unerwartete Fehler anzeigen und protokollieren (ohne Konsolenfenster sonst unsichtbar)."""
+    sys.excepthook = report_error
+    threading.excepthook = lambda a: report_error(a.exc_type, a.exc_value, a.exc_traceback)
 
 
 def main() -> int:
+    global _bridge
     multiprocessing.freeze_support()
     _install_error_handler()
     app = QApplication(sys.argv)
+    _bridge = _ErrorBridge()
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("Blackline")
     app.setStyle("Fusion")
