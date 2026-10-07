@@ -143,9 +143,17 @@ class AIDetector:
         lines.append(f"- Mandant: {'; '.join(m) if m else '(nicht angegeben)'}")
         if self.inputs.mandant_adresse.strip():
             lines.append(f"  Anschrift Mandant: {self.inputs.mandant_adresse.strip()}")
-        lines.append(f"- Gegner: {'; '.join(g) if g else '(nicht angegeben)'}")
-        if self.inputs.gegner_adresse.strip():
-            lines.append(f"  Anschrift Gegner: {self.inputs.gegner_adresse.strip()}")
+        if self.inputs.gegner_organisation:
+            lines.append(f"- Gegner: {'; '.join(g) if g else '(nicht angegeben)'} – juristische Person/Behörde: "
+                         "deren Name und Anschrift NICHT angeben. Natürliche Personen, die für sie handeln "
+                         "(Sachbearbeiter, Geschäftsführer, Unterzeichner), aber schon – mit ihrem eigenen Namen "
+                         "als Bezug, nicht \"Gegner\".")
+            if self.inputs.gegner_adresse.strip():
+                lines.append(f"  Anschrift Gegner (nicht angeben): {self.inputs.gegner_adresse.strip()}")
+        else:
+            lines.append(f"- Gegner: {'; '.join(g) if g else '(nicht angegeben)'}")
+            if self.inputs.gegner_adresse.strip():
+                lines.append(f"  Anschrift Gegner: {self.inputs.gegner_adresse.strip()}")
         others = [p for p in self.registry.persons]
         if others:
             lines.append("- Bereits gefundene weitere Personen (bei Bezug genau so schreiben): "

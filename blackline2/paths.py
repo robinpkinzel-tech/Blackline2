@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
+
+# Dateinamen der Modelle, die Blackline 2 einrichtet (auch von anderen Programmen geladen erkennbar)
+KNOWN_MODEL_FILES: dict[str, str] = {
+    "schnell": r"^qwen3-4b-instruct-2507.*q4_k_m\.gguf$",
+    "ausgewogen": r"^qwen3-8b-q4_k_m\.gguf$",
+    "gruendlich": r"^gemma-3-12b-it.*q4_k_m\.gguf$",
+}
+MIN_MODEL_SIZE = 1_000_000_000  # kleinere .gguf-Dateien sind unvollständig oder keine Sprachmodelle
 
 
 def app_root() -> Path:
@@ -85,16 +94,99 @@ def find_llama_server() -> Path | None:
     return None
 
 
-def find_model() -> Path | None:
-    """Nimmt das größte .gguf-Modell aus den Modellordnern."""
+def own_models() -> list[Path]:
+    """Modelle in den Blackline-Ordnern (ohne Bildmodelle und unvollständige Downloads)."""
     models: list[Path] = []
     for root in _ki_roots():
         base = root / "modelle"
         if base.exists():
-            models += [p for p in base.glob("*.gguf") if p.is_file() and not p.name.startswith("mmproj")]
-    if not models:
-        return None
-    return max(models, key=lambda p: p.stat().st_size)
+            models += [p for p in base.glob("*.gguf")
+                       if p.is_file() and not p.name.startswith("mmproj") and p not in models]
+    return models
+
+
+def external_model_dirs() -> list[Path]:
+    """Übliche Ablagen anderer KI-Programme (LM Studio, llama.cpp, Hugging Face, Downloads)."""
+    home = Path.home()
+    dirs = [home / ".lmstudio" / "models", home / ".cache" / "lm-studio" / "models",
+            home / ".cache" / "llama.cpp", home / ".cache" / "huggingface" / "hub"]
+    if sys.platform == "darwin":
+        dirs.insert(0, home / "Library" / "Caches" / "llama.cpp")
+    elif sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        dirs.insert(0, Path(os.environ["LOCALAPPDATA"]) / "llama.cpp")
+    hf = os.environ.get("HF_HOME")
+    if hf:
+        dirs.append(Path(hf) / "hub")
+    dirs.append(home / "Downloads")
+    return dirs
+
+
+def model_kind(path: Path) -> str | None:
+    """Welches der Blackline-Modelle ist diese Datei? ("schnell", "ausgewogen", "gruendlich")"""
+    name = path.name.lower().removesuffix(".part")
+    for kind, pattern in KNOWN_MODEL_FILES.items():
+        if re.search(pattern, name):
+            return kind
+    return None
+
+
+def _usable(p: Path) -> bool:
+    try:
+        return p.is_file() and p.stat().st_size >= MIN_MODEL_SIZE
+    except OSError:
+        return False
+
+
+def _iter_known_models():
+    """(Art, Pfad) aller vollständigen Blackline-Modelle – eigene Ordner zuerst."""
+    for p in sorted(own_models(), key=lambda x: -x.stat().st_size):
+        if model_kind(p) and _usable(p):
+            yield model_kind(p), p
+    for base in external_model_dirs():
+        if not base.is_dir():
+            continue
+        try:
+            found = base.glob("*.gguf") if base.name == "Downloads" else base.rglob("*.gguf")
+            for p in found:
+                k = model_kind(p)
+                if k and _usable(p):
+                    yield k, p
+        except OSError:
+            continue
+
+
+def find_known_model(kind: str | None = None) -> Path | None:
+    """Bereits vorhandenes Blackline-Modell suchen – erst eigene Ordner, dann andere KI-Programme.
+
+    So wird ein schon geladenes Modell weiterverwendet statt ein zweites Mal heruntergeladen.
+    """
+    return next((p for k, p in _iter_known_models() if kind is None or k == kind), None)
+
+
+def known_models() -> dict[str, Path]:
+    """Je Modellart die erste gefundene Datei."""
+    out: dict[str, Path] = {}
+    for k, p in _iter_known_models():
+        out.setdefault(k, p)
+    return out
+
+
+def find_model() -> Path | None:
+    """Nimmt das größte .gguf-Modell aus den Modellordnern, sonst ein anderswo vorhandenes Blackline-Modell."""
+    models = [p for p in own_models() if _usable(p)] or own_models()
+    if models:
+        return max(models, key=lambda p: p.stat().st_size)
+    return find_known_model()
+
+
+def partial_downloads() -> list[Path]:
+    """Angefangene Modell-Downloads (werden bei der nächsten Einrichtung fortgesetzt)."""
+    out: list[Path] = []
+    for root in _ki_roots():
+        base = root / "modelle"
+        if base.exists():
+            out += [p for p in base.glob("*.gguf.part") if p.is_file() and p not in out]
+    return out
 
 
 def find_tessdata() -> Path | None:
