@@ -203,7 +203,7 @@ class LocalAIServer:
                 raise AIServerError(f"KI-Modell nicht gefunden: {self.model_path}")
             cleanup_stale_server()
             self.port = _free_port()
-            self.api_key = secrets.token_urlsafe(24)
+            self.api_key = secrets.token_hex(24)  # nur 0-9a-f: darf nie mit "-" beginnen (sonst Option)
             cmd = self.command()
             kwargs: dict = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, cwd=str(self.server_path.parent))
