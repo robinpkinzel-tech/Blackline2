@@ -22,7 +22,7 @@ from blackline2.ai.detector import SETTINGS_CATEGORY, AIDetector, Finding
 from blackline2.detect_inputs import UserInputs, address_parts, detect_inputs, is_organisation, split_values
 from blackline2.detect_names import PRIO_SALUTATION, detect_salutation_names
 from blackline2.detect_patterns import MOBILE_PREFIX, detect_patterns
-from blackline2.labels import CATEGORY_LABELS, PersonRegistry, name_tokens
+from blackline2.labels import CATEGORY_LABELS, PersonRegistry, name_tokens, relabel
 from blackline2.loader import Cancelled
 from blackline2.matching import PageIndex, norm, tokenize, tokens_match
 from blackline2.model import (PRIO_AI, PRIO_AI_SPREAD, PRIO_INPUT_PART, PRIO_MANUAL, PRIO_USER_TERM, Document, Hit,
@@ -37,6 +37,7 @@ class AnalysisReport:
     ai_used: bool = False
     ai_errors: list[str] = field(default_factory=list)
     hit_count: int = 0
+    skipped_organisation: int = 0  # KI-Funde zur Gegnerin (Firma/Behörde), bewusst nicht geschwärzt
 
 
 _PARTY_WORDS = {"mandant", "mandantin", "mandantschaft", "gegner", "gegnerin", "gegenseite"}
@@ -64,6 +65,45 @@ def _party_if_plausible(f: Finding, registry: PersonRegistry, inputs: UserInputs
     if toks and all(any(tokens_match(t, pt) for pt in party.tokens) for t in toks):
         return party
     return None
+
+
+_LEGAL_FORM = {"gmbh", "mbh", "ag", "kg", "ohg", "gbr", "ug", "se", "ev", "e.v", "co", "kgaa", "haftungsbeschränkt",
+               "&", "und", "u", "der", "die", "das", "des", "für"}
+
+
+def _org_core(name: str) -> set[str]:
+    return {t for t in (norm(w) for w in name.replace(",", " ").split()) if t and t not in _LEGAL_FORM}
+
+
+def is_gegner_organisation_finding(f: Finding, inputs: UserInputs) -> bool:
+    """Gegner ist Firma/Behörde: deren Name und Anschrift nicht schwärzen.
+
+    Natürliche Personen, die für die Gegnerin handeln (Sachbearbeiter, Geschäftsführer),
+    werden weiterhin geschwärzt – nur der vollständige Name der Gegnerin bleibt stehen.
+    """
+    if not inputs.gegner_organisation:
+        return False
+    role = _norm_role(f.bezug)
+    if f.kategorie == "adresse":
+        if role in _PARTY_WORDS and role.startswith(("gegner", "gegenseite")):
+            return True
+        got = tokenize(f.text)
+        for part in address_parts(inputs.gegner_adresse):
+            want = tokenize(part)
+            if got and want and all(any(tokens_match(g, w) for w in want) for g in got):
+                return True
+        return False
+    if f.kategorie not in ("name", "sonstiges"):
+        return False
+    text = _org_core(f.text)
+    for name in split_values(inputs.gegner_name):
+        full = {t for t in (norm(w) for w in name.replace(",", " ").split()) if t}
+        core = _org_core(name)
+        if not text:
+            continue
+        if text == full or (len(core) >= 2 and text == core) or (len(text) >= 2 and text <= core):
+            return True
+    return False
 
 
 def _party_address_if_plausible(f: Finding, registry: PersonRegistry, inputs: UserInputs):
@@ -220,9 +260,10 @@ class Analyzer:
         self.enabled = {k for k, v in settings.categories.items() if v}
 
     def run(self, docs: list[Document], progress: ProgressFn | None = None,
-            cancel: threading.Event | None = None) -> AnalysisReport:
+            cancel: threading.Event | None = None, all_docs: list[Document] | None = None) -> AnalysisReport:
+        """Analysiert `docs`. `all_docs` (alle geladenen Dokumente) erhalten die endgültigen Personenkürzel."""
         report = AnalysisReport(ai_used=self.detector is not None)
-        self.registry.set_parties(split_values(self.inputs.mandant_name), split_values(self.inputs.gegner_name))
+        self.registry.set_parties(split_values(self.inputs.mandant_name), self.inputs.gegner_names())
         pages = [(d, p) for d in docs for p in d.pages]
         total = len(pages) * (2 if self.detector else 1)
         step = 0
@@ -265,6 +306,9 @@ class Analyzer:
                 for f in findings:
                     cat0 = SETTINGS_CATEGORY.get(f.kategorie, "sonstiges")
                     if cat0 != "benutzer" and cat0 not in self.enabled:
+                        continue
+                    if is_gegner_organisation_finding(f, self.inputs):
+                        report.skipped_organisation += 1
                         continue
                     # erst prüfen, ob die Stelle wirklich im Text steht (keine erfundenen Personen anlegen)
                     found = indexes[key].find(f.text, fuzzy=self.settings.fuzzy_matching,
@@ -309,7 +353,16 @@ class Analyzer:
             d.hits = [h for h in manual if not h.segments] + hits
             d.analyzed = True
             report.hit_count += len(d.hits)
-        assign_groups(docs)
+
+        # 6) Endgültige Kürzel: weitere Personen nach Anfangsbuchstaben ("R.K.")
+        everything = list(all_docs) if all_docs is not None else list(docs)
+        everything += [d for d in docs if d not in everything]
+        mapping = self.registry.assign_initials({label for _t, label in self.inputs.custom_terms()})
+        if mapping:
+            for d in everything:
+                for h in d.hits:
+                    h.label = relabel(h.label, mapping)
+        assign_groups(everything)
         return report
 
     def _mark_shared_tokens(self, new_hits: dict[tuple[int, int], list[Hit]]) -> None:
