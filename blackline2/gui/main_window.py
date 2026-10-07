@@ -728,6 +728,7 @@ class MainWindow(QMainWindow):
                 use_ai = False
 
         settings, registry, ai = self.settings, self.registry, self.ai
+        all_docs = list(self.docs)
 
         def job(progress, cancel, docs):
             detector = None
@@ -740,7 +741,7 @@ class MainWindow(QMainWindow):
                 if client is None:
                     raise RuntimeError("Die KI ist nicht bereit.")
                 detector = AIDetector(client, registry, inputs, settings.ki_exclude_professionals)
-            return Analyzer(settings, inputs, registry, detector).run(docs, progress, cancel)
+            return Analyzer(settings, inputs, registry, detector).run(docs, progress, cancel, all_docs)
 
         self._run(job, todo, on_done=self._analyzed, label="Analyse")
 
@@ -750,6 +751,8 @@ class MainWindow(QMainWindow):
         msg = f"Analyse fertig: {report.hit_count} Fundstellen."
         if not report.ai_used:
             msg += " (ohne KI)"
+        if report.skipped_organisation:
+            msg += " Gegner (juristische Person/Behörde) bleibt lesbar."
         questions = {h.group for d in self.docs for h in d.hits if h.question}
         if questions:
             msg += f"  ❓ {len(questions)} Rückfrage(n) der KI – bitte im Reiter „Funde prüfen“ beantworten."

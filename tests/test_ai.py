@@ -49,8 +49,8 @@ def test_server_lifecycle_and_detection(fake_server, page_factory):
         report = Analyzer(Settings(), inputs, reg, det).run([doc])
         labels = {(h.label, h.text) for h in doc.hits}
         assert report.ai_used and not report.ai_errors
-        assert ("Person A", "Erika Mustermann") in labels
-        assert ("Person B", "Jens Beispiel") in labels
+        assert ("E.M.", "Erika Mustermann") in labels
+        assert ("J.B.", "Jens Beispiel") in labels
         assert ("Mandant", "Kinzel") in labels
     finally:
         srv.stop()
@@ -72,8 +72,8 @@ def test_ai_spread_to_other_pages(fake_server, page_factory):
         doc = Document(path=__import__("pathlib").Path("x.pdf"), pdf_bytes=b"", pages=[p1, p2])
         Analyzer(Settings(), UserInputs(), reg, det).run([doc])
         page2 = {(h.label, h.text) for h in doc.hits if h.page == 1}
-        assert ("Person A", "Mustermann") in page2
-        assert ("Person A", "Erika") in page2
+        assert ("E.M.", "Mustermann") in page2
+        assert ("E.M.", "Erika") in page2
     finally:
         srv.stop()
 
@@ -111,7 +111,7 @@ def test_hallucinated_person_gets_no_label(page_factory):
     reg = PersonRegistry()
     doc = Document(path=__import__("pathlib").Path("x.pdf"), pdf_bytes=b"", pages=[page])
     Analyzer(Settings(), UserInputs(), reg, _HallucinatingDetector()).run([doc])
-    assert {(h.label, h.text) for h in doc.hits} == {("Person A", "Jens Beispiel")}
+    assert {(h.label, h.text) for h in doc.hits} == {("J.B.", "Jens Beispiel")}
     assert [p.display for p in reg.persons] == ["Jens Beispiel"]
 
 
@@ -189,7 +189,7 @@ def test_ai_wrong_party_assignment_is_corrected(page_factory):
         ("Kinzel", "name", "Mandant"),                  # richtig
         ("Bahnhofstraße 7", "adresse", "Mandant"),      # passt nicht zur angegebenen Adresse
     ], UserInputs("Robin Kinzel", "Musterweg 15, 12345 Musterstadt"))
-    assert ("Person A", "Petra Musterfrau") in hits
+    assert ("P.M.", "Petra Musterfrau") in hits
     assert ("Mandant", "Kinzel") in hits or ("Mandant", "Robin Kinzel") in hits
     assert ("Adresse", "Bahnhofstraße 7") in hits
 
@@ -197,13 +197,13 @@ def test_ai_wrong_party_assignment_is_corrected(page_factory):
 def test_ai_party_without_user_input_is_not_guessed(page_factory):
     page = page_factory("Herr Jens Beispiel war da.")
     hits, _ = _run_scripted(page, [("Jens Beispiel", "name", "Gegner")])
-    assert hits == {("Person A", "Jens Beispiel")}
+    assert hits == {("J.B.", "Jens Beispiel")}
 
 
 def test_role_words_are_not_name_parts(page_factory):
     page = page_factory("Die Zeugin Petra Musterfrau sagte aus. Die Zeugin blieb.")
     hits, reg = _run_scripted(page, [("Zeugin Petra Musterfrau", "name", "Zeugin Petra Musterfrau")])
-    assert ("Person A", "Petra Musterfrau") in hits
+    assert ("P.M.", "Petra Musterfrau") in hits
     assert not any(t == "Zeugin" for _l, t in hits)
     assert "zeugin" not in reg.persons[0].tokens
 

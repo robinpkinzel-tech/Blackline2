@@ -305,8 +305,12 @@ def _extract(archive: Path, dest: Path) -> None:
                 t.extractall(dest)
 
 
-def setup_llama(gpu: str = "cpu") -> Path:
+def setup_llama(gpu: str = "cpu", update: bool = True) -> Path:
     _say("== KI-Programm (llama.cpp / llama-server) ==")
+    existing = paths.find_llama_server()
+    if existing is not None and not update:
+        _say(f"  bereits vorhanden – wird weiterverwendet: {existing}")
+        return existing
     rel, asset = find_llama_asset(gpu)
     assets = rel.get("assets", [])
     _say(f"  Version {rel.get('tag_name')}: {asset['name']}")
@@ -346,6 +350,24 @@ def setup_llama(gpu: str = "cpu") -> Path:
 def setup_model(choice: str) -> Path:
     info = MODELS[choice]
     _say(f"== KI-Modell: {info['info']} ==")
+    existing = paths.find_known_model(choice)
+    if existing is not None:
+        # schon geladen (auch von einer früheren Version oder einem anderen KI-Programm): nicht doppelt laden
+        _say(f"  bereits vorhanden – wird weiterverwendet: {existing}")
+        target = existing
+    else:
+        target = _download_model(info)
+    # andere Modelle nicht löschen, aber dieses als Standard eintragen
+    from blackline2.settings import Settings
+
+    s = Settings.load()
+    s.model_path = str(target)
+    s.save()
+    _say(f"  OK – {target}")
+    return target
+
+
+def _download_model(info: dict) -> Path:
     data = get_json(f"https://huggingface.co/api/models/{info['repo']}")
     files = [s["rfilename"] for s in data.get("siblings", [])] if isinstance(data, dict) else []
     cands = [f for f in files if re.search(info["pattern"], f, re.I) and "mmproj" not in f.lower()]
@@ -358,13 +380,6 @@ def setup_model(choice: str) -> Path:
     else:
         url = f"https://huggingface.co/{info['repo']}/resolve/main/{fname}?download=true"
         download(url, target, target.name)
-    # andere Modelle nicht löschen, aber das neue als Standard eintragen
-    from blackline2.settings import Settings
-
-    s = Settings.load()
-    s.model_path = str(target)
-    s.save()
-    _say(f"  OK – {target}")
     return target
 
 
@@ -372,7 +387,7 @@ def setup_model(choice: str) -> Path:
 
 def run_setup(modell: str = "ausgewogen", gpu: str = "cpu", ocr: bool = True, ki: bool = True,
               reporter: Callable[[str, int, int], None] | None = None,
-              cancel: threading.Event | None = None) -> Path | None:
+              cancel: threading.Event | None = None, update_llama: bool = True) -> Path | None:
     """Alles einrichten; Fortschritt an reporter(msg, done, total). Liefert den Modellpfad."""
     global REPORTER, CANCEL
     REPORTER, CANCEL = reporter, cancel
@@ -381,7 +396,7 @@ def run_setup(modell: str = "ausgewogen", gpu: str = "cpu", ocr: bool = True, ki
             setup_ocr()
         model = None
         if ki:
-            setup_llama(gpu)
+            setup_llama(gpu, update=update_llama)
             model = setup_model(modell)
         _say("Fertig.")
         return model

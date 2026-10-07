@@ -24,13 +24,13 @@ def test_groups_span_all_documents(page_factory):
     docs = _docs(page_factory)
     Analyzer(Settings(), UserInputs("Robin Kinzel"), PersonRegistry()).run(docs)
     groups = {h.group for d in docs for h in d.hits}
-    assert "name|Mandant" in groups and "name|Person A" in groups
+    assert "name|Mandant" in groups and "name|E.M." in groups
     phone = next(h for h in docs[0].hits if h.category == "telefon")
     members = group_members(docs, phone.group)
     assert len(members) == 2 and {d.name for d, _h in members} == {"a.pdf", "b.pdf"}
-    n = set_group_enabled(docs, "name|Person A", False)
+    n = set_group_enabled(docs, "name|E.M.", False)
     assert n == 3
-    assert all(not h.enabled for d in docs for h in d.hits if h.label == "Person A")
+    assert all(not h.enabled for d in docs for h in d.hits if h.label == "E.M.")
     assert all(h.enabled for d in docs for h in d.hits if h.label == "Mandant")
 
 
@@ -91,8 +91,8 @@ def test_session_roundtrip(tmp_path, page_factory):
     assert [p.name for p in session.session_paths(data)] == ["a.pdf", "b.pdf"]
     reg2 = PersonRegistry()
     session.restore_registry(data, reg2)
-    assert [p.label for p in reg2.persons] == ["Person A"]
-    assert reg2.resolve("Jens Beispiel").label == "Person B"
+    assert [p.label for p in reg2.persons] == ["E.M."]
+    assert reg2.resolve("Erika Mustermann").label == "E.M."
 
     fresh = _docs(page_factory)  # "neu geladen"
     ok, dropped = session.apply_session_hits(data, fresh[0])
@@ -123,7 +123,7 @@ def test_session_relocates_changed_ocr(tmp_path, page_factory):
 def test_question_propagates_to_group(page_factory):
     docs = _docs(page_factory)
     Analyzer(Settings(), UserInputs(), PersonRegistry()).run(docs)
-    target = next(h for d in docs for h in d.hits if h.label == "Person A")
+    target = next(h for d in docs for h in d.hits if h.label == "E.M.")
     target.question = "Nur dienstlich genannt?"
     assign_groups(docs)
-    assert all(h.question == "Nur dienstlich genannt?" for d in docs for h in d.hits if h.label == "Person A")
+    assert all(h.question == "Nur dienstlich genannt?" for d in docs for h in d.hits if h.label == "E.M.")

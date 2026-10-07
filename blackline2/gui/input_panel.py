@@ -44,6 +44,14 @@ class InputPanel(QScrollArea):
         self.gegner_adresse = QLineEdit(placeholderText="Straße Nr., PLZ Ort")
         fg.addRow("Name:", self.gegner_name)
         fg.addRow("Adresse:", self.gegner_adresse)
+        self.gegner_org = QCheckBox("Gegner ist eine juristische Person / Behörde – nicht schwärzen")
+        self.gegner_org.setToolTip(
+            "Name und Anschrift des Gegners (z. B. Firma, Versicherung, Jobcenter) bleiben lesbar.\n"
+            "Personen, die für ihn handeln (Sachbearbeiter, Geschäftsführer), werden weiterhin geschwärzt\n"
+            "und bekommen ihre Anfangsbuchstaben als Kürzel.")
+        self.gegner_org.toggled.connect(self._gegner_org_changed)
+        fg.addRow("", self.gegner_org)
+        self._box_g = box_g
         lay.addWidget(box_g)
 
         box_c = QGroupBox("Weitere Begriffe (Suchbegriff → wird ersetzt durch)")
@@ -85,6 +93,10 @@ class InputPanel(QScrollArea):
         lay.addStretch(1)
         self.setWidget(inner)
 
+    def _gegner_org_changed(self, on: bool) -> None:
+        self._box_g.setTitle("Gegner  →  bleibt lesbar (juristische Person / Behörde)" if on
+                             else "Gegner  →  „Gegner“ / „Adresse Gegner“")
+
     def _categories_changed(self) -> None:
         for key, cb in self.cat_boxes.items():
             self.settings.categories[key] = cb.isChecked()
@@ -97,6 +109,7 @@ class InputPanel(QScrollArea):
             gegner_name=self.gegner_name.text(),
             gegner_adresse=self.gegner_adresse.text(),
             custom=[(t.text(), l.text()) for t, l in self.custom if t.text().strip()],
+            gegner_organisation=self.gegner_org.isChecked(),
         )
 
     def set_inputs(self, ui: UserInputs) -> None:
@@ -104,6 +117,7 @@ class InputPanel(QScrollArea):
         self.mandant_adresse.setText(ui.mandant_adresse)
         self.gegner_name.setText(ui.gegner_name)
         self.gegner_adresse.setText(ui.gegner_adresse)
+        self.gegner_org.setChecked(ui.gegner_organisation)
         for (t, l), pair in zip(self.custom, list(ui.custom) + [("", "")] * CUSTOM_ROWS, strict=False):
             t.setText(pair[0])
             l.setText(pair[1])
@@ -111,6 +125,7 @@ class InputPanel(QScrollArea):
     def clear(self) -> None:
         for w in (self.mandant_name, self.mandant_adresse, self.gegner_name, self.gegner_adresse):
             w.clear()
+        self.gegner_org.setChecked(False)
         for t, l in self.custom:
             t.clear()
             l.clear()

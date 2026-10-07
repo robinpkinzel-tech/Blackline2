@@ -123,7 +123,7 @@ class FindingsPanel(QWidget):
         for h in sorted(hits, key=lambda h: (h.page, h.rects[0][1] if h.rects else 0)):
             groups.setdefault(h.label, []).append(h)
         order = sorted(groups, key=lambda l: (0 if l.startswith("Mandant") else 1 if l.startswith("Gegner")
-                                              else 2 if "Person" in l else 3, l))
+                                              else 2 if groups[l][0].category == "name" else 3, l))
         total_by_label: dict[str, int] = {}
         for d in self._docs:
             for h in d.hits:

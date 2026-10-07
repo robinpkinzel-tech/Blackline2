@@ -51,7 +51,7 @@ def test_gui_flow(fake_server, tmp_path, monkeypatch):
     w.analyze()
     assert _wait(app, lambda: w.worker is None and w.docs[0].analyzed)
     labels = {h.label for h in w.docs[0].hits}
-    assert {"Mandant", "Person A", "Telefon"} <= labels
+    assert {"Mandant", "E.M.", "Telefon"} <= labels
 
     # Klick auf Markierung schaltet um
     hit = w.docs[0].hits[0]
@@ -193,3 +193,32 @@ def test_gui_inline_label_editor(fake_server, tmp_path):
     assert w.view.active_editor is None
     assert len([h for h in doc.hits if h.text == "(manueller Bereich)"]) == 0
     w.close()
+
+
+def test_input_panel_gegner_organisation(tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    try:
+        QApplication.instance() or QApplication(sys.argv)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Qt nicht startbar: {exc}")
+    from blackline2 import session
+    from blackline2.gui.input_panel import InputPanel
+    from blackline2.labels import PersonRegistry
+    from blackline2.settings import Settings
+
+    panel = InputPanel(Settings())
+    assert panel.inputs().gegner_organisation is False
+    panel.gegner_name.setText("Jobcenter Musterstadt")
+    panel.gegner_org.setChecked(True)
+    ui = panel.inputs()
+    assert ui.gegner_organisation and ui.gegner_names() == [] and "lesbar" in panel._box_g.title()
+    # bleibt im gespeicherten Vorgang erhalten
+    path = tmp_path / "v.blackline2"
+    session.save_session(path, [], ui, PersonRegistry())
+    restored = session.session_inputs(session.load_session(path))
+    assert restored == ui
+    panel.clear()
+    assert not panel.gegner_org.isChecked()
+    panel.set_inputs(restored)
+    assert panel.gegner_org.isChecked()

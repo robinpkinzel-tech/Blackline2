@@ -3,7 +3,7 @@
 Blackline 2 liest PDFs und Bilder (auch eingescannte Papierakten), findet mit einer
 **lokalen KI** Namen und persönliche Daten und schwärzt sie: Die Stelle wird **weiß
 überdeckt** und mit einem **Kürzel in schwarzer Schrift** beschriftet
-(z. B. „Mandant“, „Adresse Gegner“, „Person A“, „Telefon“).
+(z. B. „Mandant“, „Adresse Gegner“, „R.K.“, „Telefon“).
 
 **Alles läuft auf Ihrem Rechner.** Es werden keine Dokumente ins Internet geschickt.
 Die KI startet mit dem Programm und wird **beim Schließen automatisch beendet** –
@@ -37,7 +37,7 @@ auch wenn das Programm abstürzt oder per Task-Manager beendet wird.
 |---|---|
 | **Texterkennung (OCR)** | Eingescannte Seiten werden mit 300 dpi gelesen. Schief eingescannte Seiten werden begradigt, auf dem Kopf stehende oder quer liegende Seiten erkannt und aufgerichtet, Grauschleier/ungleichmäßige Ausleuchtung ausgeglichen. Digitale PDFs werden direkt gelesen. |
 | **Ihre Angaben** | Mandant (Name, Adresse), Gegner (Name, Adresse) und 5 freie Felder „Suchbegriff → Kürzel“. Mehrere Angaben je Feld mit `;` trennen. Gefunden werden auch Varianten: nur Nachname, „R. Kinzel“, „Kinzels“, Silbentrennung („Kin-/zel“), OCR-Fehler („Kinzei“), „Str.“/„Straße“. |
-| **KI** | Liest jede Seite vollständig und meldet alle Namen und persönlichen Daten natürlicher Personen. Jede Person bekommt ein festes Kürzel (Person A, Person B …), das in allen Dokumenten des Vorgangs gleich bleibt. Was die KI auf einer Seite findet, wird automatisch auch auf allen anderen Seiten geschwärzt. Erfundene Funde („Halluzinationen“) werden verworfen, weil nur geschwärzt wird, was wirklich im Text steht. |
+| **KI** | Liest jede Seite vollständig und meldet alle Namen und persönlichen Daten natürlicher Personen. Jede weitere Person bekommt ihre Anfangsbuchstaben als festes Kürzel („Rita Klein“ → „R.K.“, „Ursula von der Leyen“ → „U.v.d.L.“), das in allen Dokumenten des Vorgangs gleich bleibt. Haben zwei Personen dieselben Anfangsbuchstaben, werden sie unterschieden („R.Ki.“ / „R.Kl.“, notfalls „H.M.“ / „H.M. (2)“). Mandant und Gegner heißen weiterhin „Mandant“ und „Gegner“. Was die KI auf einer Seite findet, wird automatisch auch auf allen anderen Seiten geschwärzt. Erfundene Funde („Halluzinationen“) werden verworfen, weil nur geschwärzt wird, was wirklich im Text steht. |
 | **Sicherheitsnetz für Namen** | Unabhängig von der KI gilt jedes Wort nach Anreden und Rollen („Herr“, „Frau“, „Dr.“, „Zeugin“, „Nachbarin“, „Kläger“ …) als Name – auch im Anschriftenfeld („Herrn“ / nächste Zeile). So bleibt kein Name stehen, nur weil die KI ihn übersehen hat. |
 | **Feste Regeln** | E-Mail, Telefon/Handy/Fax, IBAN (mit Prüfziffer) und Kontonummern, Sozialversicherungs-/Renten-/Krankenversichertennummern, Versicherungsscheinnummern, Geburtsdaten („geb.“, „geb. am“, „geboren am“, „Geburtsdatum:“, „\*“), Geburtsort und Geburtsname. |
 | **Rückfragen der KI** | Ist sich die KI nicht sicher (z. B. Rechtsanwalt der Gegenseite, Firmenname mit Personenname, Ort ohne klaren Wohnortbezug), stellt sie eine Rückfrage mit kurzer Begründung. Ihre Antwort „Schwärzen“ / „Nicht schwärzen“ gilt sofort für **alle gleichen Stellen in allen geladenen Dokumenten**. |
@@ -75,6 +75,12 @@ die ohne Python-Installation laufen. Sie werden automatisch von GitHub gebaut
 
 Die KI und die Texterkennungsdaten landen in `~/Library/Application Support/Blackline2/`.
 Später lässt sich alles über **Datei → KI einrichten / aktualisieren** ändern.
+
+**Neue Version installieren:** einfach die neue `Blackline2-macOS.dmg` laden und die App in „Programme“
+ersetzen. Das schon geladene KI-Modell bleibt im Benutzerordner und wird von der neuen Version
+weiterverwendet – es wird nichts doppelt heruntergeladen. Die Einrichtung erkennt vorhandene Modelle
+(„✓ vorhanden“), auch solche aus LM Studio, dem llama.cpp-/Hugging-Face-Zwischenspeicher oder dem
+Download-Ordner, und setzt angefangene Downloads fort („⏸ angefangen“).
 
 ### Windows (fertiges Programm statt Python)
 
@@ -134,7 +140,9 @@ Eigenes Modell: Jede `.gguf`-Datei in `ki\modelle\` kann verwendet werden
 1. **Dokumente laden** – „Dateien öffnen“ oder Dateien/Ordner ins Fenster ziehen.
 2. **Angaben eintragen** (Reiter „1. Angaben“):
    * Mandant: Name → wird zu „Mandant“, Adresse → „Adresse Mandant“
-   * Gegner: Name → „Gegner“, Adresse → „Adresse Gegner“
+   * Gegner: Name → „Gegner“, Adresse → „Adresse Gegner“. Häkchen **„Gegner ist eine juristische
+     Person / Behörde“**: Name und Anschrift des Gegners (Firma, Versicherung, Jobcenter …) bleiben
+     lesbar; Personen, die für ihn handeln (Sachbearbeiter, Geschäftsführer), werden trotzdem geschwärzt
    * Bis zu 5 freie Begriffe, z. B. `Volkswagen` → `Arbeitgeber`
 3. **Analysieren** – Regeln und KI laufen über alle Seiten aller Dokumente.
 4. **Funde prüfen** (Reiter „2. Funde prüfen“):
@@ -145,7 +153,7 @@ Eigenes Modell: Jede `.gguf`-Datei in `ki\modelle\` kann verwendet werden
    * Markierung anklicken = überall nicht schwärzen (gestrichelt) / wieder schwärzen;
      **Strg+Klick** = nur diese Stelle
    * **Rechtsklick auf ein Wort** = nachträglich überall schwärzen, Kürzel wählen
-   * Rechtsklick in der Liste = Kürzel ändern (z. B. „Person A“ → „Zeuge 1“)
+   * Rechtsklick in der Liste = Kürzel ändern (z. B. „R.K.“ → „Zeuge 1“)
    * **Selbst schwärzen:** In der „Vorschau Schwärzung“ (oder mit Shift+Ziehen in jeder Ansicht) einen
      Bereich mit der Maus aufziehen – er wird sofort weiß, direkt darunter erscheint das Eingabefeld für
      das Kürzel. Tippen, **Enter** – fertig. Häkchen „auch überall“ schwärzt den enthaltenen Text
@@ -218,7 +226,7 @@ blackline2/
   setup_ki.py        Download von llama.cpp, Modell und OCR-Daten (Konsole und Oberfläche)
   gui/setup_dialog.py Einrichtung aus dem Programm heraus
 packaging/           PyInstaller-Spec und Symbol für die fertigen Programme
-  labels.py          Kürzel und Personenverwaltung (Person A, B, …)
+  labels.py          Kürzel und Personenverwaltung (Anfangsbuchstaben „R.K.“)
   ai/server.py       Start/Stopp von llama-server (Job-Objekt, PDEATHSIG, Wächter)
   ai/client.py       OpenAI-kompatibler Client (nur localhost)
   ai/detector.py     Prompt, JSON-Schema, Auswertung der KI-Antworten

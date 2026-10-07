@@ -62,3 +62,42 @@ def test_registry_resolves_name_variants():
     assert reg.resolve("Frau Mustermann") is a
     assert reg.resolve("Erika Maria Mustermann") is a
     assert reg.resolve("Jens Beispiel").label == "Person B"
+
+
+def test_initials_from_names():
+    from blackline2.labels import initials
+    assert initials("Robin Kinzel") == "R.K."
+    assert initials("Kinzel, Robin") == "R.K."
+    assert initials("Dr. Erika Maria Mustermann") == "E.M.M."
+    assert initials("Ursula von der Leyen") == "U.v.d.L."
+    assert initials("Anna-Lena Schmidt-Weber") == "A.-L.S.-W."
+    assert initials("Herrn Müller") == "M."
+    assert initials("R. Kinzel") == "R.K."
+    assert initials("Gül Yilmaz") == "G.Y."
+    assert short_label("R.K.") == "R.K."
+    assert short_label("Adresse R.K.") == "Adr. R.K."
+    assert short_label("U.v.d.L.") == "U.v.d.L."
+
+
+def test_registry_assigns_initials_and_resolves_clashes():
+    from blackline2.labels import relabel
+    reg = PersonRegistry()
+    reg.set_parties(["Max Mandant"], ["Gerd Gegner"])
+    for n in ("Robin Kinzel", "Rita Klein", "Hans Müller", "Hanna Müller", "Jens Beispiel"):
+        reg.resolve(n)
+    mapping = reg.assign_initials()
+    assert [p.label for p in reg.persons] == ["R.Ki.", "R.Kl.", "H.M.", "H.M. (2)", "J.B."]
+    assert reg.mandant.label == "Mandant" and reg.gegner.label == "Gegner"
+    assert mapping["Adresse Person E"] == "Adresse J.B."
+    assert relabel("Person C/Person D", mapping) == "H.M./H.M. (2)"
+    assert reg.assign_initials() == {}  # stabil
+    # später bekannter vollständiger Name verfeinert das Kürzel
+    reg2 = PersonRegistry()
+    p = reg2.resolve("Mustermann")
+    reg2.assign_initials()
+    assert p.label == "M."
+    p.add_name("Erika Mustermann")  # z. B. später im Dokument vollständig genannt
+    assert reg2.assign_initials() == {"M.": "E.M.", "Adresse M.": "Adresse E.M."}
+    # vom Nutzer umbenannte Personen behalten ihr Kürzel
+    reg2.rename("E.M.", "Zeugin")
+    assert reg2.assign_initials() == {} and p.label == "Zeugin"

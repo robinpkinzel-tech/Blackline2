@@ -104,7 +104,7 @@ def test_real_ki_letter(server, tmp_path):
     assert "Yilmaz" in texts or "Yılmaz" in texts, "KI hat die Nachbarin nicht gefunden"
     assert not any(h.text == "Zeugin" for h in doc.hits), "Rollenwort als Name geschwärzt"
     by_text = {h.text: h.label for h in doc.hits}
-    assert by_text.get("Petra Musterfrau", "").startswith("Person"), by_text
+    assert by_text.get("Petra Musterfrau", "") == "P.M.", by_text
     for d in ("12.03.2024", "15.10.2024"):
         if d in by_text:
             print(f"HINWEIS: gewöhnliches Datum {d} wurde geschwärzt ({by_text[d]})")

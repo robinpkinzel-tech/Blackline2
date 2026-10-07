@@ -13,7 +13,7 @@ from blackline2 import paths, setup_ki
 def test_run_setup_reports_progress(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(setup_ki, "setup_ocr", lambda: setup_ki._say("ocr ok"))
-    monkeypatch.setattr(setup_ki, "setup_llama", lambda gpu: setup_ki._say(f"llama {gpu}"))
+    monkeypatch.setattr(setup_ki, "setup_llama", lambda gpu, update=True: setup_ki._say(f"llama {gpu}"))
     monkeypatch.setattr(setup_ki, "setup_model", lambda m: (setup_ki._say(f"modell {m}", 5, 10), tmp_path / "m.gguf")[1])
     result = setup_ki.run_setup("schnell", "vulkan", True, True, lambda m, d, t: calls.append((m, d, t)), None)
     assert result == tmp_path / "m.gguf"
@@ -72,7 +72,7 @@ def test_setup_dialog_runs_and_reports(monkeypatch):
     from blackline2.gui.setup_dialog import SetupDialog
     from blackline2.settings import Settings
 
-    def fake_run(modell, gpu, ocr, ki, reporter, cancel):
+    def fake_run(modell, gpu, ocr, ki, reporter, cancel, update_llama=True):
         reporter("lade", 0, 0)
         for i in range(1, 4):
             reporter(f"modell {i}/3", i, 3)
@@ -94,4 +94,96 @@ def test_setup_dialog_runs_and_reports(monkeypatch):
     assert Path(s.model_path) == Path("/pfad/modell.gguf")  # Windows: Backslashes
     assert "Fertig" in dlg.status.text()
     assert "lade" in dlg.log.toPlainText()
+    dlg.close()
+
+
+def _fake_model(path: Path, size: int = paths.MIN_MODEL_SIZE + 1) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        f.truncate(size)  # Datei ohne echten Plattenplatz
+    return path
+
+
+@pytest.fixture
+def isolated(monkeypatch, tmp_path):
+    """Eigene Ordner und fremde KI-Ablagen in tmp_path; Einstellungen nicht im echten Benutzerordner."""
+    own, ext = tmp_path / "ki", tmp_path / "lmstudio"
+    monkeypatch.setattr(paths, "_ki_roots", lambda: [own])
+    monkeypatch.setattr(paths, "ki_dir", lambda: own)
+    monkeypatch.setattr(paths, "external_model_dirs", lambda: [ext])
+    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path / "config")
+    monkeypatch.setattr(paths, "settings_file", lambda: tmp_path / "config" / "einstellungen.json")
+    return own, ext
+
+
+def test_model_kinds_match_download_names():
+    assert paths.model_kind(Path("gemma-3-12b-it-Q4_K_M.gguf")) == "gruendlich"
+    assert paths.model_kind(Path("Qwen3-8B-Q4_K_M.gguf")) == "ausgewogen"
+    assert paths.model_kind(Path("Qwen3-4B-Instruct-2507-Q4_K_M.gguf")) == "schnell"
+    assert paths.model_kind(Path("gemma-3-12b-it-Q4_K_M.gguf.part")) == "gruendlich"
+    assert paths.model_kind(Path("Qwen3-8B-Q8_0.gguf")) is None
+
+
+def test_setup_reuses_existing_model_without_download(monkeypatch, isolated):
+    """Neue Programmversion: das schon geladene Modell wird gefunden und nicht erneut geladen."""
+    own, _ext = isolated
+    model = _fake_model(own / "modelle" / "gemma-3-12b-it-Q4_K_M.gguf")
+
+    def no_network(*a, **k):
+        raise AssertionError("Es darf nichts heruntergeladen werden")
+
+    monkeypatch.setattr(setup_ki, "get_json", no_network)
+    monkeypatch.setattr(setup_ki, "download", no_network)
+    assert setup_ki.setup_model("gruendlich") == model
+    from blackline2.settings import Settings
+    assert Path(Settings.load().model_path) == model
+    assert paths.find_model() == model
+
+
+def test_model_from_other_program_is_used(monkeypatch, isolated):
+    _own, ext = isolated
+    model = _fake_model(ext / "lmstudio-community" / "gemma-3-12b-it-GGUF" / "gemma-3-12b-it-Q4_K_M.gguf")
+    _fake_model(ext / "x" / "Qwen3-8B-Q4_K_M.gguf", 1000)  # unvollständig -> ignorieren
+    assert paths.find_known_model("gruendlich") == model
+    assert paths.find_known_model("ausgewogen") is None
+    assert paths.find_model() == model
+    monkeypatch.setattr(setup_ki, "get_json", lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
+    assert setup_ki.setup_model("gruendlich") == model
+
+
+def test_setup_llama_keeps_existing_program(monkeypatch, isolated):
+    own, _ext = isolated
+    exe = own / "llama.cpp" / paths.server_exe_name()
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"x")
+    monkeypatch.setattr(setup_ki, "find_llama_asset", lambda gpu: (_ for _ in ()).throw(AssertionError()))
+    assert setup_ki.setup_llama("cpu", update=False) == exe
+
+
+def test_setup_dialog_preselects_present_model(isolated):
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    try:
+        QApplication.instance() or QApplication(sys.argv)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Qt nicht startbar: {exc}")
+    from blackline2.gui.setup_dialog import SetupDialog
+    from blackline2.settings import Settings
+
+    own, _ext = isolated
+    _fake_model(own / "modelle" / "gemma-3-12b-it-Q4_K_M.gguf")
+    dlg = SetupDialog(Settings())
+    assert dlg.model.currentData() == "gruendlich"
+    assert "vorhanden" in dlg.model.currentText() and "weiterverwendet" in dlg.model_info.text()
+    assert dlg.update_llama.isChecked()  # KI-Programm fehlt noch -> wird geladen
+    dlg.model.setCurrentIndex(dlg.model.findData("schnell"))
+    assert "bleibt erhalten" in dlg.model_info.text()
+    dlg.close()
+
+    # angefangener Download wird erkannt und vorausgewählt
+    (own / "modelle" / "gemma-3-12b-it-Q4_K_M.gguf").unlink()
+    _fake_model(own / "modelle" / "Qwen3-8B-Q4_K_M.gguf.part", 2_000_000)
+    dlg = SetupDialog(Settings())
+    assert dlg.model.currentData() == "ausgewogen" and "fortgesetzt" in dlg.model_info.text()
     dlg.close()
