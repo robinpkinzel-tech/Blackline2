@@ -35,6 +35,15 @@ class UserInputs:
     gegner_name: str = ""
     gegner_adresse: str = ""
     custom: list[tuple[str, str]] = field(default_factory=list)  # (Suchbegriff, Ersetzung)
+    # Gegner ist eine juristische Person/Behörde: Name und Anschrift bleiben stehen
+    gegner_organisation: bool = False
+
+    def gegner_names(self) -> list[str]:
+        """Gegner-Namen, die geschwärzt werden (keine bei juristischer Person/Behörde)."""
+        return [] if self.gegner_organisation else split_values(self.gegner_name)
+
+    def gegner_address(self) -> str:
+        return "" if self.gegner_organisation else self.gegner_adresse
 
     def custom_terms(self) -> list[tuple[str, str]]:
         out = []
@@ -111,7 +120,7 @@ def detect_inputs(page: PageData, inputs: UserInputs, registry: PersonRegistry,
     idx = idx or PageIndex(page)
     hits: list[Hit] = []
     mandant = split_values(inputs.mandant_name)
-    gegner = split_values(inputs.gegner_name)
+    gegner = inputs.gegner_names()
     groups = [(registry.mandant.label, mandant), (registry.gegner.label, gegner)]
     shared = _shared_tokens(groups)
 
@@ -121,7 +130,7 @@ def detect_inputs(page: PageData, inputs: UserInputs, registry: PersonRegistry,
 
     if "adresse" in enabled:
         for address, label in ((inputs.mandant_adresse, LABEL_ADR_MANDANT),
-                               (inputs.gegner_adresse, LABEL_ADR_GEGNER)):
+                               (inputs.gegner_address(), LABEL_ADR_GEGNER)):
             for part in address_parts(address):
                 for segs in idx.find(part, fuzzy=fuzzy):
                     segs = page.trim_segments(segs)

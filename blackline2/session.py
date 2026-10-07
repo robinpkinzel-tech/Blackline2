@@ -38,7 +38,8 @@ def save_session(path: Path, docs: list[Document], inputs: UserInputs, registry:
         "programm": f"Blackline 2 {__version__}",
         "hinweis": "Enthält Mandantendaten – vertraulich behandeln.",
         "inputs": asdict(inputs),
-        "persons": [{"label": p.label, "kind": p.kind, "names": p.names} for p in registry.all()],
+        "persons": [{"label": p.label, "kind": p.kind, "names": p.names, "fixed": p.fixed}
+                    for p in registry.all()],
         "docs": [{
             "path": str(d.path),
             "analyzed": d.analyzed,
@@ -61,7 +62,8 @@ def session_inputs(data: dict) -> UserInputs:
     raw = data.get("inputs", {})
     custom = [tuple(x) for x in raw.get("custom", []) if isinstance(x, (list, tuple)) and len(x) == 2]
     return UserInputs(raw.get("mandant_name", ""), raw.get("mandant_adresse", ""),
-                      raw.get("gegner_name", ""), raw.get("gegner_adresse", ""), custom)
+                      raw.get("gegner_name", ""), raw.get("gegner_adresse", ""), custom,
+                      bool(raw.get("gegner_organisation", False)))
 
 
 def session_paths(data: dict) -> list[Path]:
@@ -79,7 +81,7 @@ def restore_registry(data: dict, registry: PersonRegistry) -> None:
             for n in p.get("names", []):
                 registry.gegner.add_name(n)
         else:
-            person = Person(p.get("label", "Person ?"), "person")
+            person = Person(p.get("label", "Person ?"), "person", fixed=bool(p.get("fixed", False)))
             for n in p.get("names", []):
                 person.add_name(n)
             persons.append(person)
