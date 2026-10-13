@@ -279,7 +279,29 @@ def list_llama_releases() -> list[dict]:
     return _releases_from_web()
 
 
+# Das offizielle llama.cpp-Paket für Intel-Macs verlangt macOS 13.3. Für ältere Intel-Macs (z. B. iMac 2015,
+# höchstens macOS 12) baut der Release-Workflow ein eigenes Paket und hängt es an jede Veröffentlichung an.
+OWN_LLAMA_MACOS12 = ("https://github.com/robinpkinzel-tech/Blackline2/releases/latest/download/"
+                     "llama-cpp-macos12-x64.zip")
+
+
+def macos_version() -> tuple[int, int]:
+    parts = (platform.mac_ver()[0] or "0.0").split(".") + ["0"]
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return 0, 0
+
+
+def needs_compat_llama() -> bool:
+    """Intel-Mac mit macOS älter als 13.3: das offizielle Paket würde nicht starten."""
+    return paths.is_intel_mac() and macos_version() < (13, 3)
+
+
 def find_llama_asset(gpu: str) -> tuple[dict, dict]:
+    if needs_compat_llama():
+        return ({"tag_name": "eigenes Paket für macOS 12"},
+                {"name": "llama-cpp-macos12-x64.zip", "browser_download_url": OWN_LLAMA_MACOS12})
     releases = list_llama_releases()
     for rel in releases:
         if rel.get("draft"):

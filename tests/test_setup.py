@@ -79,3 +79,26 @@ def test_download_and_extract(tmp_path):
         assert (dest / "build" / "bin" / "llama-server").exists()
     finally:
         httpd.shutdown()
+
+
+def test_old_intel_mac_gets_own_llama_package(monkeypatch):
+    """Intel-Mac mit macOS 12: das offizielle Paket (verlangt macOS 13.3) wäre unbrauchbar -> eigenes Paket."""
+    monkeypatch.setattr(setup_ki.sys, "platform", "darwin")
+    monkeypatch.setattr(setup_ki.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(setup_ki.platform, "mac_ver", lambda: ("12.7.6", ("", "", ""), "x86_64"))
+    monkeypatch.setattr(setup_ki, "list_llama_releases", lambda: (_ for _ in ()).throw(AssertionError("kein Netz")))
+    rel, asset = setup_ki.find_llama_asset("cpu")
+    assert asset["name"] == "llama-cpp-macos12-x64.zip"
+    assert asset["browser_download_url"].startswith("https://github.com/robinpkinzel-tech/Blackline2/releases/")
+
+    # macOS 13.3 oder neuer, oder Apple-Chip: offizielles Paket
+    rels = [{"tag_name": "b2", "assets": [{"name": "llama-b2-bin-macos-arm64.tar.gz"},
+                                          {"name": "llama-b2-bin-macos-x64.tar.gz"}]}]
+    monkeypatch.setattr(setup_ki, "list_llama_releases", lambda: rels)
+    for ver in ("13.3", "14.0", "26.5.2"):
+        monkeypatch.setattr(setup_ki.platform, "mac_ver", lambda ver=ver: (ver, ("", "", ""), "x86_64"))
+        assert setup_ki.find_llama_asset("cpu")[1]["name"] == "llama-b2-bin-macos-x64.tar.gz"
+    monkeypatch.setattr(setup_ki.platform, "mac_ver", lambda: ("12.7.6", ("", "", ""), "arm64"))
+    monkeypatch.setattr(setup_ki.platform, "machine", lambda: "arm64")
+    assert setup_ki.find_llama_asset("cpu")[1]["name"] == "llama-b2-bin-macos-arm64.tar.gz"
+    assert setup_ki.macos_version() == (12, 7)

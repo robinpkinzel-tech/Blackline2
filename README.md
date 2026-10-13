@@ -89,7 +89,9 @@ Apple-Chip hat, steht unter **Apfel-Menü → Über diesen Mac**.
 
 * Die Oberfläche ist hier PySide6 6.9, weil neuere Versionen mindestens macOS 13/14 verlangen. Beim Bau
   prüft `packaging/check_macos_version.py` jede Datei der App und bricht ab, wenn etwas mehr als macOS 12
-  verlangt. Dasselbe gilt für das KI-Programm (`packaging/check_llama_cpp.py`).
+  verlangt. Das offizielle llama.cpp-Paket für Intel-Macs verlangt macOS 13.3; deshalb baut der Workflow
+  für Intel ein eigenes KI-Programm (Ziel macOS 12, nur Prozessor) und hängt es als `llama-cpp-macos12-x64.zip`
+  an die Veröffentlichung an. Die KI-Einrichtung lädt auf Intel-Macs mit macOS älter als 13.3 automatisch dieses.
 * Die KI rechnet auf Intel-Macs nur auf dem Prozessor und ist deutlich langsamer als mit Apple-Chip.
   Empfohlen wird das Modell **„schnell“** (wird in der Einrichtung vorgeschlagen); mit 16 GB Arbeitsspeicher
   ist auch „ausgewogen“ möglich, braucht aber pro Seite spürbar länger.
