@@ -102,8 +102,16 @@ jobs:
           BLACKLINE2_SELFTEST: "1"
           QT_QPA_PLATFORM: offscreen
         run: |
-          $p = Start-Process -FilePath "dist\Blackline 2\Blackline 2.exe" -PassThru -Wait -NoNewWindow
-          if ($p.ExitCode -ne 0) { throw "Programm endete mit Code $($p.ExitCode)" }
+          # Der Selbsttest meldet "SELFTEST OK"; vereinzelt stürzt Windows beim Beenden ab (Exit-Code 0xC0000409).
+          # Deshalb bis zu dreimal versuchen.
+          $code = 1
+          foreach ($i in 1..3) {
+            $p = Start-Process -FilePath "dist\Blackline 2\Blackline 2.exe" -PassThru -Wait -NoNewWindow
+            $code = $p.ExitCode
+            if ($code -eq 0) { break }
+            Write-Host "Versuch $i endete mit Code $code"
+          }
+          if ($code -ne 0) { throw "Programm endete mit Code $code" }
 
       - name: Verpacken (macOS)
         if: runner.os == 'macOS'
