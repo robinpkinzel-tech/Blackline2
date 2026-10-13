@@ -181,6 +181,9 @@ _GPU_WORDS = ("cuda", "vulkan", "hip", "rocm", "sycl", "opencl", "musa", "komput
 _ARCHIVE = re.compile(r"\.(zip|tar\.gz|tgz)$", re.I)
 
 
+_ALL_ARCH = {"arm64", "aarch64", "x64", "amd64", "x86"}
+
+
 def _system_words() -> tuple[tuple[str, ...], tuple[str, ...]]:
     machine = platform.machine().lower()
     arm = machine in ("arm64", "aarch64")
@@ -204,8 +207,9 @@ def _asset_score(name: str, gpu: str) -> int:
     if not any(w in tokens for w in osw):
         return 0
     if not any(a in tokens for a in arch):
-        # macOS-Pakete nennen die Architektur teils nicht
-        if sys.platform != "darwin":
+        # macOS-Pakete nennen die Architektur teils nicht – nennen sie eine, muss es die eigene sein
+        # (sonst bekäme ein Intel-Mac das Apple-Silicon-Paket und umgekehrt)
+        if sys.platform != "darwin" or tokens & _ALL_ARCH or "x86_64" in n:
             return 0
     has_gpu = [w for w in _GPU_WORDS if w in n]
     score = 10

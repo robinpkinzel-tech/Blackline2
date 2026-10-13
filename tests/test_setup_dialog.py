@@ -187,3 +187,40 @@ def test_setup_dialog_preselects_present_model(isolated):
     dlg = SetupDialog(Settings())
     assert dlg.model.currentData() == "ausgewogen" and "fortgesetzt" in dlg.model_info.text()
     dlg.close()
+
+
+def test_is_intel_mac(monkeypatch):
+    import types
+    monkeypatch.setattr(paths, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(paths.platform, "machine", lambda: "x86_64")
+    assert paths.is_intel_mac()
+    monkeypatch.setattr(paths.platform, "machine", lambda: "arm64")
+    assert not paths.is_intel_mac()
+    monkeypatch.setattr(paths, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(paths.platform, "machine", lambda: "AMD64")
+    assert not paths.is_intel_mac()
+
+
+def test_intel_mac_defaults(monkeypatch, isolated):
+    """Intel-Mac: KI nur auf dem Prozessor, kleines Modell vorgeschlagen."""
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    try:
+        QApplication.instance() or QApplication(sys.argv)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Qt nicht startbar: {exc}")
+    from blackline2.gui.setup_dialog import SetupDialog
+    from blackline2.settings import Settings
+
+    monkeypatch.setattr(paths, "is_intel_mac", lambda: False)
+    assert Settings().ki_gpu_layers == 99
+    assert SetupDialog(Settings()).model.currentData() == "ausgewogen"
+    monkeypatch.setattr(paths, "is_intel_mac", lambda: True)
+    assert Settings().ki_gpu_layers == 0
+    dlg = SetupDialog(Settings())
+    assert dlg.model.currentData() == "schnell"
+    assert "Intel" in dlg.gpu.currentText()
+    dlg.model.setCurrentIndex(dlg.model.findData("gruendlich"))
+    assert "Intel-Macs" in dlg.model_info.text()
+    dlg.close()

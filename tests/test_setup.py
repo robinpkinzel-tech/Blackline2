@@ -11,7 +11,8 @@ from blackline2 import setup_ki
 ASSETS = [{"name": n} for n in (
     "llama-b1-bin-win-cpu-x64.zip", "llama-b1-bin-win-vulkan-x64.zip", "llama-b1-bin-win-hip-radeon-x64.zip",
     "llama-b1-bin-win-cuda-12.4-x64.zip", "cudart-llama-bin-win-cuda-12.4-x64.zip",
-    "llama-b1-bin-win-cpu-arm64.zip", "llama-b1-bin-macos-arm64.tar.gz", "llama-b1-bin-ubuntu-x64.tar.gz",
+    "llama-b1-bin-win-cpu-arm64.zip", "llama-b1-bin-macos-arm64.tar.gz", "llama-b1-bin-macos-x64.tar.gz",
+    "llama-b1-bin-ubuntu-x64.tar.gz",
     "llama-b1-bin-ubuntu-vulkan-x64.tar.gz", "llama-b1-xcframework.zip", "nightly-tag.txt")]
 
 
@@ -28,6 +29,14 @@ def test_pick_asset(monkeypatch):
     assert _pick(monkeypatch, "win32", "AMD64", "cuda") == "llama-b1-bin-win-cuda-12.4-x64.zip"
     assert _pick(monkeypatch, "win32", "ARM64", "cpu") == "llama-b1-bin-win-cpu-arm64.zip"
     assert _pick(monkeypatch, "darwin", "arm64", "cpu") == "llama-b1-bin-macos-arm64.tar.gz"
+    # Intel-Mac bekommt das Intel-Paket (nicht das gleich gut bewertete Apple-Silicon-Paket) und umgekehrt
+    assert _pick(monkeypatch, "darwin", "x86_64", "cpu") == "llama-b1-bin-macos-x64.tar.gz"
+    both = [{"name": "llama-b1-bin-macos-arm64.tar.gz"}, {"name": "llama-b1-bin-macos-x64.tar.gz"}]
+    assert _pick(monkeypatch, "darwin", "x86_64", "cpu", both) == "llama-b1-bin-macos-x64.tar.gz"
+    assert _pick(monkeypatch, "darwin", "arm64", "cpu", both) == "llama-b1-bin-macos-arm64.tar.gz"
+    assert _pick(monkeypatch, "darwin", "x86_64", "cpu", [both[0]]) is None  # kein Intel-Paket vorhanden
+    assert _pick(monkeypatch, "darwin", "x86_64", "cpu", [{"name": "llama-b1-bin-macos.zip"}]) \
+        == "llama-b1-bin-macos.zip"  # Paket ohne Architekturangabe bleibt erlaubt
     assert _pick(monkeypatch, "linux", "x86_64", "cpu") == "llama-b1-bin-ubuntu-x64.tar.gz"
     assert _pick(monkeypatch, "linux", "x86_64", "vulkan") == "llama-b1-bin-ubuntu-vulkan-x64.tar.gz"
     assert _pick(monkeypatch, "linux", "x86_64", "cpu", [{"name": "nightly-tag.txt"}]) is None

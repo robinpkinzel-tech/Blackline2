@@ -41,7 +41,7 @@ class Settings:
     model_path: str = ""            # leer = größtes .gguf in ki/modelle
     ki_context: int = 8192
     ki_threads: int = 0             # 0 = automatisch
-    ki_gpu_layers: int = 99         # ohne GPU-Build wirkungslos
+    ki_gpu_layers: int = field(default_factory=lambda: 0 if paths.is_intel_mac() else 99)  # 0 = nur Prozessor
     ki_extra_args: str = "--jinja"
     ki_start_timeout: int = 300
     ki_request_timeout: int = 900

@@ -62,7 +62,7 @@ Unter **[Releases](https://github.com/robinpkinzel-tech/Blackline2/releases)** l
 die ohne Python-Installation laufen. Sie werden automatisch von GitHub gebaut
 (`.github/workflows/release.yml`).
 
-### Mac (Apple Silicon, macOS 12 oder neuer)
+### Mac mit Apple-Chip (M1 bis M5)
 
 1. `Blackline2-macOS.dmg` herunterladen und öffnen.
 2. „Blackline 2“ in den Ordner **Programme** ziehen.
@@ -81,6 +81,19 @@ ersetzen. Das schon geladene KI-Modell bleibt im Benutzerordner und wird von der
 weiterverwendet – es wird nichts doppelt heruntergeladen. Die Einrichtung erkennt vorhandene Modelle
 („✓ vorhanden“), auch solche aus LM Studio, dem llama.cpp-/Hugging-Face-Zwischenspeicher oder dem
 Download-Ordner, und setzt angefangene Downloads fort („⏸ angefangen“).
+
+### Mac mit Intel-Prozessor (z. B. iMac Ende 2015, macOS 12 oder neuer)
+
+Eigene Datei: `Blackline2-macOS-Intel.dmg` (Installation genau wie oben). Ob ein Mac einen Intel- oder
+Apple-Chip hat, steht unter **Apfel-Menü → Über diesen Mac**.
+
+* Die Oberfläche ist hier PySide6 6.9, weil neuere Versionen mindestens macOS 13/14 verlangen. Beim Bau
+  prüft `packaging/check_macos_version.py` jede Datei der App und bricht ab, wenn etwas mehr als macOS 12
+  verlangt. Dasselbe gilt für das KI-Programm (`packaging/check_llama_cpp.py`).
+* Die KI rechnet auf Intel-Macs nur auf dem Prozessor und ist deutlich langsamer als mit Apple-Chip.
+  Empfohlen wird das Modell **„schnell“** (wird in der Einrichtung vorgeschlagen); mit 16 GB Arbeitsspeicher
+  ist auch „ausgewogen“ möglich, braucht aber pro Seite spürbar länger.
+* Der Ablauf bleibt gleich; Dauer einer langen Akte vorher grob einplanen (Restzeitanzeige beim Analysieren).
 
 ### Windows (fertiges Programm statt Python)
 

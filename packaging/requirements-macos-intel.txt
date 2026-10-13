@@ -1,0 +1,11 @@
+# Bauvorgaben für die Intel-Mac-Version (z. B. iMac 2015, höchstens macOS 12 "Monterey").
+# PySide6 ab 6.10 verlangt macOS 13, ab 6.12 macOS 14 -> 6.9.3 ist die letzte Version für macOS 12.
+PySide6==6.9.3
+PyMuPDF>=1.24.10
+Pillow>=10.1
+numpy>=1.26
+rapidfuzz>=3.0
+psutil>=5.9
+python-docx>=1.1
+certifi
+pyinstaller

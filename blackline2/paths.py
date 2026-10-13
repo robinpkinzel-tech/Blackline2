@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import re
 import sys
 from pathlib import Path
@@ -25,6 +26,11 @@ def app_root() -> Path:
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
+
+
+def is_intel_mac() -> bool:
+    """Mac mit Intel-Prozessor (z. B. iMac 2015): KI läuft dort nur auf dem Prozessor, deutlich langsamer."""
+    return sys.platform == "darwin" and platform.machine().lower() in ("x86_64", "amd64")
 
 
 def data_root() -> Path:

@@ -47,7 +47,9 @@ class SetupDialog(QDialog):
         self.model_info.setWordWrap(True)
         form.addRow("", self.model_info)
         self.gpu = QComboBox()
-        if sys.platform == "darwin":
+        if paths.is_intel_mac():
+            self.gpu.addItem("Nur Prozessor (Intel-Mac)", "cpu")
+        elif sys.platform == "darwin":
             self.gpu.addItem("Standard (nutzt die Grafikeinheit des Mac automatisch)", "cpu")
         elif sys.platform == "win32":
             self.gpu.addItem("Nur Prozessor (funktioniert überall)", "cpu")
@@ -108,7 +110,7 @@ class SetupDialog(QDialog):
             return next(iter(self.present))
         if self.partial:
             return next(iter(self.partial))
-        return "ausgewogen"
+        return "schnell" if paths.is_intel_mac() else "ausgewogen"
 
     def _item_text(self, key: str) -> str:
         mark = "  ✓ vorhanden" if key in self.present else "  ⏸ angefangen" if key in self.partial else ""
@@ -124,6 +126,9 @@ class SetupDialog(QDialog):
             text = f"⏸ Download angefangen ({gb:.1f} GB geladen) – wird fortgesetzt."
         else:
             text = "Wird heruntergeladen."
+            if paths.is_intel_mac() and key != "schnell":
+                text += (" Hinweis: Auf Intel-Macs rechnet die KI nur auf dem Prozessor – „schnell“ ist deutlich "
+                         "zügiger, die größeren Modelle brauchen pro Seite spürbar länger.")
             others = [p.name for k, p in self.present.items() if k != key]
             if others:
                 text += (f" Hinweis: {', '.join(others)} ist schon vorhanden und bleibt erhalten "

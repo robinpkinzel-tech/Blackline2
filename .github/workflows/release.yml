@@ -2,6 +2,7 @@ name: Release (fertige Programme)
 
 # Baut Blackline 2 als fertige Programme:
 #   * macOS (Apple Silicon): Blackline2-macOS.dmg und .zip
+#   * macOS (Intel, z. B. iMac 2015, ab macOS 12): Blackline2-macOS-Intel.dmg und .zip
 #   * Windows: Blackline2-Windows.zip (Ordner mit "Blackline 2.exe")
 # Bei einem Tag "v*" werden die Dateien an die GitHub-Veröffentlichung angehängt,
 # bei manuellem Start ("Run workflow") liegen sie als Artefakte am Lauf.
@@ -28,6 +29,9 @@ jobs:
         include:
           - os: macos-latest
             name: macOS
+          - os: macos-15-intel
+            name: macOS-Intel
+            intel: true
           - os: windows-latest
             name: Windows
     runs-on: ${{ matrix.os }}
@@ -37,11 +41,33 @@ jobs:
         with:
           python-version: "3.12"
       - name: Abhängigkeiten
+        if: ${{ !matrix.intel }}
         run: python -m pip install -r requirements.txt pyinstaller
+      - name: Abhängigkeiten (Intel-Mac, passend für macOS 12)
+        if: ${{ matrix.intel }}
+        run: |
+          # Pakete ausdrücklich für macOS 12 laden (sonst zieht pip auf dem neuen Build-Rechner
+          # z. B. numpy-Pakete, die erst ab macOS 14 laufen)
+          python -m pip install --upgrade pip
+          python -m pip download -r packaging/requirements-macos-intel.txt --platform macosx_12_0_x86_64 \
+            --python-version 3.12 --implementation cp --abi cp312 --abi abi3 --abi none --only-binary=:all: -d wheelhouse
+          python -m pip install --no-index --find-links wheelhouse -r packaging/requirements-macos-intel.txt
       - name: Programmsymbol
         run: python packaging/make_icon.py
       - name: Bauen
         run: pyinstaller --noconfirm --clean packaging/Blackline2.spec
+
+      - name: "Mindest-macOS der App prüfen (Intel - höchstens macOS 12)"
+        if: ${{ matrix.intel }}
+        run: python packaging/check_macos_version.py "dist/Blackline 2.app" --max 12.0
+      - name: Mindest-macOS der App (Information)
+        if: runner.os == 'macOS' && !matrix.intel
+        run: python packaging/check_macos_version.py "dist/Blackline 2.app" || true
+      - name: KI-Paket für Intel-Mac prüfen (llama.cpp muss unter macOS 12 starten)
+        if: ${{ matrix.intel }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python packaging/check_llama_cpp.py --max 12.0
 
       - name: Startprüfung (macOS)
         if: runner.os == 'macOS'
@@ -68,9 +94,9 @@ jobs:
           mkdir -p staging
           cp -R "dist/Blackline 2.app" staging/
           ln -s /Applications staging/Programme
-          hdiutil create -volname "Blackline 2" -srcfolder staging -ov -format UDZO Blackline2-macOS.dmg
-          ditto -c -k --sequesterRsrc --keepParent "dist/Blackline 2.app" Blackline2-macOS.zip
-          ls -la Blackline2-macOS.*
+          hdiutil create -volname "Blackline 2" -srcfolder staging -ov -format UDZO "Blackline2-${{ matrix.name }}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "dist/Blackline 2.app" "Blackline2-${{ matrix.name }}.zip"
+          ls -la Blackline2-*
       - name: Verpacken (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -104,6 +130,11 @@ jobs:
           (die App ist nicht bei Apple notarisiert). Dann: Programm im Finder mit **Rechtsklick → Öffnen → Öffnen**
           starten. Falls kein „Öffnen“-Knopf erscheint (macOS 15): **Systemeinstellungen → Datenschutz & Sicherheit**
           → ganz unten **„Dennoch öffnen“**. Das ist nur einmal nötig.
+
+          **Mac mit Intel-Prozessor (z. B. iMac 2015, macOS 12 oder neuer):** `Blackline2-macOS-Intel.dmg` –
+          Installation wie oben. Die KI rechnet dort nur auf dem Prozessor und ist deutlich langsamer als auf
+          einem Mac mit Apple-Chip; zum Einrichten das Modell „schnell“ wählen. Ob Ihr Mac einen Intel- oder
+          Apple-Chip hat, steht unter Apfel-Menü → „Über diesen Mac“.
 
           **Windows 10/11:** `Blackline2-Windows.zip` entpacken (z. B. nach `C:\Blackline2`) und
           `Blackline 2.exe` starten. Der SmartScreen-Hinweis „Unbekannter Herausgeber“ wird mit
